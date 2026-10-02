@@ -1,21 +1,22 @@
 #!/usr/bin/env node
-// mobile/tools/verify-apk.mjs — end-to-end check of the *packaged* APK without an Android device.
+// mobile/tools/check-apk.mjs — end-to-end check of the *packaged* APK without an Android device.
 //
-//   node mobile/tools/verify-apk.mjs [--apk mobile/build/….apk] [--node18 <dir>] [--keep] [--json <report.json>]
+//   node mobile/tools/check-apk.mjs [--apk mobile/build/<name>.apk] [--node <exe>] [--keep] [--json <report.json>]
 //
 // What it proves (this is the strongest check that runs on a developer machine):
 //   1. the APK contains everything the app needs (classes.dex, resources.arsc, AndroidManifest.xml, the native
-//      runtime and the whole assets/nodejs-project tree) and every `assets/**` entry is intact — the ZIP is read
+//      runtime and the whole assets/nodejs-project tree) and every `assets/**` entry is intact —the ZIP is read
 //      with Node's own zlib, so a CRC/size mismatch or a corrupt entry is detected;
-//   2. the exact `assets/nodejs-project` tree is unpacked to a temporary directory and started with **Node 18**
-//      (the runtime version nodejs-mobile embeds) using the same arguments MainActivity passes on the phone:
+//   2. the exact `assets/nodejs-project` tree is unpacked to a temporary directory and started with a **Node 22+**
+//      interpreter (the APK itself ships Termux's Node 24 for the phone) using the same arguments MainActivity
+//      passes on the device:
 //        node <dir>/mobile/node/main.js --public <dir>/public --data <dir>/data --handshake <tmp>/handshake.json
 //      — which is the real mobile entry point, the real server and the real client files;
 //   3. over that server: /healthz, the client page, /data.js, the /sim/ simulation, vendor libs, fonts, gzip, a
 //      206 range request, the /ws upgrade, and a sample of the art the client will request.
 //
 // It does not replace installing the APK on a phone (Android's own package handling, the WebView, audio and the
-// touch UI cannot be exercised here) — but it catches every packaging, path, ESM and Node-version problem.
+// touch UI cannot be exercised here) —but it catches every packaging, path, ESM and Node-version problem.
 
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -32,13 +33,14 @@ const REPO = path.resolve(HERE, '..', '..');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function parseArgs(argv) {
-  const o = { apk: null, node18: process.env.SP_NODE18 || null, keep: false, json: null, sample: 120 };
+  const o = { apk: null, node: process.env.SP_NODE || null, keep: false, json: null, sample: 120, help: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--apk') o.apk = argv[++i];
-    else if (a === '--node18') o.node18 = argv[++i];
+    else if (a === '--node' || a === '--node18') o.node = argv[++i];
     else if (a === '--keep') o.keep = true;
     else if (a === '--json') o.json = argv[++i];
+    else if (a === '--help' || a === '-h') o.help = true;
     else if (a === '--sample') o.sample = Number(argv[++i]) || 120;
     else throw new Error(`unknown option ${a}`);
   }
@@ -88,7 +90,7 @@ async function readZip(apk) {
   return { fh, size, entries };
 }
 
-/** Read and decompress one entry (verifying CRC and size — a corrupt APK entry surfaces here, not on the phone). */
+/** Read and decompress one entry (verifying CRC and size —a corrupt APK entry surfaces here, not on the phone). */
 async function readEntry(zip, entry) {
   const header = Buffer.alloc(30);
   await zip.fh.read(header, 0, 30, entry.localOffset);
@@ -108,7 +110,7 @@ async function readEntry(zip, entry) {
   return data;
 }
 
-// Node 18/20 have no zlib.crc32: a tiny table implementation keeps this tool dependency-free.
+// Node 20 and older have no zlib.crc32: a tiny table implementation keeps this tool dependency-free.
 function require$$0crc32(buf) {
   const table = require$$0crc32.table || (require$$0crc32.table = (() => {
     const t = new Int32Array(256);
@@ -160,11 +162,10 @@ function wsUpgrade(port) {
   });
 }
 
-/** A Node 18 executable: --node18, $SP_NODE18, or any node18 we can find (a plain `node` is used as a last resort). */
-function resolveNode18(explicit) {
-  const cands = [explicit, process.env.SP_NODE18, path.join(os.tmpdir(), 'node18-probe', 'node-v18.20.4-win-x64', 'node.exe')].filter(Boolean);
-  for (const c of cands) if (c && fs.existsSync(c)) return c;
-  return null;
+/** A Node 22+ interpreter: `--node`, $SP_NODE, else the one running this script (which the packager requires anyway). */
+function resolveNode(explicit) {
+  for (const c of [explicit, process.env.SP_NODE].filter(Boolean)) if (fs.existsSync(c)) return c;
+  return process.execPath;
 }
 
 async function main() {
@@ -172,12 +173,12 @@ async function main() {
   const report = { apk: o.apk, startedAt: new Date().toISOString(), checks: [], failures: [] };
   const check = (name, ok, detail = '') => {
     report.checks.push({ name, ok: !!ok, detail: String(detail).slice(0, 300) });
-    console.log(`${ok ? '  ok  ' : ' FAIL '} ${name}${detail ? `  — ${String(detail).slice(0, 180)}` : ''}`);
+    console.log(`${ok ? '  ok  ' : ' FAIL '} ${name}${detail ? `  —${String(detail).slice(0, 180)}` : ''}`);
     if (!ok) report.failures.push(name);
     return !!ok;
   };
 
-  console.log(`\n▶ verifying ${path.relative(REPO, o.apk)}`);
+  console.log(`\n鈻?verifying ${path.relative(REPO, o.apk)}`);
   const zip = await readZip(o.apk);
   const byName = new Map(zip.entries.map((e) => [e.name, e]));
   report.entries = zip.entries.length;
@@ -187,8 +188,14 @@ async function main() {
   for (const need of ['classes.dex', 'resources.arsc', 'AndroidManifest.xml']) {
     check(`APK contains ${need}`, byName.has(need));
   }
-  const libs = zip.entries.filter((e) => /^lib\/[^/]+\/.*\.so$/.test(e.name)).map((e) => e.name).sort();
-  check('APK contains the Node runtime + JNI shim', libs.includes('lib/arm64-v8a/libnode.so') && libs.includes('lib/arm64-v8a/libspnode.so'), libs.join(', '));
+  // The runtime lives in lib/<abi>/: the Termux `node` executable plus the shared libraries it links against.
+  const libEntries = zip.entries.filter((e) => e.name.startsWith('lib/')).map((e) => e.name).sort();
+  const nodeEntry = libEntries.find((n) => /^lib\/[^/]+\/node$/.test(n));
+  const wantedLibs = ['libc++_shared.so', 'libcrypto.so.3', 'libssl.so.3', 'libicuuc.so.78', 'libicui18n.so.78', 'libicudata.so.78', 'libcares.so', 'libsqlite3.so', 'libz.so.1'];
+  const missingLibs = wantedLibs.filter((l) => !libEntries.some((n) => n.endsWith(`/${l}`)));
+  check('APK contains the Node runtime (Termux node + its libraries)',
+    !!nodeEntry && missingLibs.length === 0,
+    `${libEntries.length} entries in lib/${nodeEntry ? `, executable ${nodeEntry}` : ', NO executable'}${missingLibs.length ? `, missing ${missingLibs.join(', ')}` : ''}`);
 
   // ---- unpack assets/nodejs-project (the exact tree the phone copies into filesDir) ------------------------
   const assets = zip.entries.filter((e) => e.name.startsWith('assets/nodejs-project/'));
@@ -209,14 +216,15 @@ async function main() {
   await zip.fh.close();
   check('every packaged asset unpacks with a valid CRC', true, `${assets.length} files, ${(bytes / 1048576).toFixed(1)} MB in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
 
-  // ---- the checks Node 18 / 22 / 24 in the mobile entry point ---------------------------------------------
-  const node18 = resolveNode18(o.node18);
-  const exe = node18 || process.execPath;
+  // ---- run the unpacked project with a Node 22+ interpreter (the runtime the APK ships is Node 24) ----------
+  const exe = resolveNode(o.node) || process.execPath;
   const version = (await new Promise((r) => {
     const c = spawn(exe, ['-v'], { stdio: ['ignore', 'pipe', 'ignore'] });
     let s = ''; c.stdout.on('data', (d) => { s += d; }); c.on('exit', () => r(s.trim()));
   })) || '?';
-  check(node18 ? `using the Node 18 runtime (${version})` : `Node 18 not found, using ${version} (SP_NODE18=… to set it)`, true, exe);
+  const major = Number(String(version).replace(/^v/, '').split('.')[0]) || 0;
+  check(`runs the unpacked project with ${version}`, major >= 22,
+    major >= 22 ? exe : `${exe} is older than the Node 22 this project requires — pass --node <exe> or set $SP_NODE`);
 
   const handshakeFile = path.join(tmp, 'handshake.json');
   const child = spawn(exe, [
@@ -270,7 +278,7 @@ async function main() {
       const rs = await Promise.all(batch.map((u) => request(port, u)));
       rs.forEach((r, k) => { if (r.status !== 200 || !r.body.length) missing.push(`${batch[k]} (${r.status})`); });
     }
-    check(`sampled ${sample.length}/${uniq.length} art URLs → 200`, missing.length === 0, missing.slice(0, 5).join(', '));
+    check(`sampled ${sample.length}/${uniq.length} art URLs answered 200`, missing.length === 0, missing.slice(0, 5).join(', '));
     report.artUrls = uniq.length;
     report.artSampled = sample.length;
   } catch (e) {

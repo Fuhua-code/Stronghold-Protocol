@@ -32,7 +32,12 @@
     "postinstall": "node tools/vendor.mjs",
     "setup": "node tools/setup.mjs",
     "doctor": "node tools/doctor.mjs",
-    "launch": "node scripts/launch.mjs"
+    "launch": "node scripts/launch.mjs",
+    "apk": "node mobile/build-apk.mjs",
+    "apk:prepare": "node mobile/build-apk.mjs --prepare",
+    "apk:check": "node mobile/build-apk.mjs --check",
+    "apk:doctor": "node mobile/tools/doctor.mjs",
+    "apk:verify": "node mobile/tools/check-server.mjs && node mobile/tools/check-apk.mjs && node mobile/tools/check-client.mjs"
   },
   "engines": {
     "node": ">=22"

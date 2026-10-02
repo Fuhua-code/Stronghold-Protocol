@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// mobile/tools/verify-client.mjs — load the *real* client (the one packaged into the APK, as unpacked on the phone)
+// mobile/tools/check-client.mjs — load the *real* client (the one packaged into the APK, as unpacked on the phone)
 // in a headless Chromium and prove that a player can get into a game: the page boots, the WebSocket connects, a
 // solo simulation starts, and the prep screen renders with its shop and board.
 //
-//   node mobile/tools/verify-client.mjs [--public <dir>] [--chrome <exe>] [--shots <dir>] [--keep] [--json <file>]
+//   node mobile/tools/check-client.mjs [--public <dir>] [--chrome <exe>] [--shots <dir>] [--keep] [--json <file>]
 //
 // `--public` defaults to the prepared `mobile/build/nodejs-project/public` when it exists, else the repository's
 // `public/`. Chrome is auto-detected (Chrome, then Edge); puppeteer-core comes from the repository's devDependencies
@@ -22,7 +22,7 @@ const REPO = path.resolve(HERE, '..', '..');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function parseArgs(argv) {
-  const o = { public: null, chrome: process.env.CHROME_PATH || null, shots: null, keep: false, json: null, headed: false };
+  const o = { public: null, chrome: process.env.CHROME_PATH || null, shots: null, keep: false, json: null, headed: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--public') o.public = argv[++i];
@@ -31,6 +31,7 @@ function parseArgs(argv) {
     else if (a === '--json') o.json = argv[++i];
     else if (a === '--keep') o.keep = true;
     else if (a === '--headed') o.headed = true;
+    else if (a === '--help' || a === '-h') o.help = true;
     else throw new Error(`unknown option ${a}`);
   }
   return o;
@@ -65,6 +66,10 @@ async function waitHandshake(file, child, timeoutMs = 90000) {
 
 async function main() {
   const o = parseArgs(process.argv.slice(2));
+  if (o.help) {
+    console.log('node mobile/tools/check-client.mjs [--public <dir>] [--chrome <exe>] [--shots <dir>] [--keep] [--json <file>] [--headed]');
+    return 0;
+  }
   const publicDir = o.public
     ? path.resolve(o.public)
     : (fs.existsSync(path.join(REPO, 'mobile', 'build', 'nodejs-project', 'public', 'index.html'))
@@ -79,7 +84,10 @@ async function main() {
     if (!ok) report.failures.push(name);
     return !!ok;
   };
-  if (!chrome) { console.error('no Chrome/Edge found (use --chrome <path> or CHROME_PATH)'); return 2; }
+  if (!chrome) {
+    console.error('no Chrome/Edge found (use --chrome <path> or CHROME_PATH)');
+    return 2;
+  }
 
   console.log(`\n▶ client check: ${path.relative(REPO, publicDir)}  ·  ${path.basename(chrome)}`);
   const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'sp-client-'));
@@ -137,13 +145,12 @@ async function main() {
     const bodyText = () => page.evaluate(() => (document.body.innerText || '').replace(/\s+/g, ' ').slice(0, 160));
     const waitFor = (re, timeout = 20000) => page.waitForFunction((src) => new RegExp(src).test(document.body.innerText || ''), { timeout }, re.source).then(() => true, () => false);
 
-    // The client walks title → lobby (confirm the nickname) → solo simulation → briefing → prep.
+    // The client walks: title (callsign) -> lobby -> solo simulation -> room -> briefing -> prep.
     const nameInput = await page.$('input[type="text"], input:not([type])');
     if (nameInput) {
       await nameInput.click();
       await page.keyboard.type('手机测试');
     }
-    // title screen: confirm the callsign (the button is labelled 开始 / 确认进入 …)
     const entered = await clickText(/^(开始|进入|确认|开始模拟)$/);
     check('entered the lobby from the title screen', !!entered, entered || 'no start button on the title screen');
     await sleep(800);
@@ -159,21 +166,23 @@ async function main() {
     await sleep(500);
     const start = await clickText(/开始独立模拟|开始模拟|创建同盟/);
     check('pressed the start button', !!start, start || 'none');
+
     // solo creates the room straight away: the lobby shows the seat and waits for 开始模拟
-    const started = await waitFor(/待命中/, 15000);
-    check('solo room created (seat shown, 待命中)', started, started ? '' : await bodyText());
+    const created = await waitFor(/待命中/, 15000);
+    check('solo room created (seat shown)', created, created ? '' : await bodyText());
     await shot('lobby');
     const go = await clickText(/开始模拟/);
     check('pressed 开始模拟', !!go, go || 'none');
+
     let phase = '';
     if (await waitFor(/确认本局信息/, 25000)) {
       phase = 'briefing';
       const confirm = await clickText(/准备就绪/);
-      check('passed the briefing screen (准备就绪)', !!confirm, confirm || 'no 准备就绪 button');
+      check('passed the briefing screen', !!confirm, confirm || 'no 准备就绪 button');
     } else {
       check('briefing screen reached', false, await bodyText());
     }
-    // a co-op match drafts a band first; solo goes straight to the prep phase — click through if it does
+    // a co-op match drafts a band first; solo goes straight to the prep phase
     if (await waitFor(/选择策略/, 6000)) {
       phase += '/draft';
       await clickText(/选择|确定|就绪/);
@@ -184,11 +193,6 @@ async function main() {
     await sleep(1200);
     await shot('match');
     check('no console / page / request errors', problems.length === 0, problems.slice(0, 4).join(' | '));
-
-    if (o.shots) {
-      await shot('title');
-      report.shots = path.resolve(o.shots);
-    }
   } catch (e) {
     check('client check', false, e?.message || String(e));
   } finally {

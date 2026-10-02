@@ -90,24 +90,28 @@ npm start          # 启动服务器：http://localhost:3000
 - 素材下载优先使用 GitHub，失败时自动改用 jsDelivr 镜像。
 - `npm run doctor`（即 `node tools/doctor.mjs`）可以随时诊断：Node 版本、素材是否完整、端口占用、局域网地址和防火墙。
 
-### 方式三：安卓 APK（手机独立运行）
+### 方式三：安卓 APK（手机独立运行）· `mobile-termux` 分支
 
-仓库可以把服务器、客户端和全部素材一起打包成一个**独立可玩的安卓 APK**（内置 Node.js 运行时，不需要电脑、
-不需要联网）：
+`mobile-termux` 分支带一个安卓打包器：把服务器、客户端、全部素材和 **Node 24 运行时（Termux 封装）** 一起打成
+一个**独立可玩的 APK**（不需要电脑、不需要联网），手机自己就是服务器，同一 Wi-Fi 的朋友用应用里的地址或房间
+链接即可联机。
 
 ```bash
-npm install                  # 依赖
-node tools/fetch-assets.mjs  # 美术 / 音频（约 250 MB，可中断续传）
-node mobile/build-apk.mjs    # → mobile/build/Stronghold-Protocol-0.1.0-android.apk
+npm run apk          # 一键：准备 + 构建 + 签名 + 核验
+                     # → mobile/build/Stronghold-Protocol-0.1.0-android.apk（约 352 MB）
+
+npm run apk:doctor   # 体检：主机 / 仓库 / 运行时来源 / 工具链 / 已连接手机
+npm run apk:check    # 自检：不构建，只验证这个克隆能不能出包
+npm run apk:verify   # 构建后跑三项验证（服务器自检、APK 解包实跑、无头浏览器进对局）
 ```
 
-首次构建会自动准备构建工具（JDK、Android SDK build-tools、NDK、nodejs-mobile，约 1.5 GB，装在仓库外的
-`.toolchain/`），不需要 Gradle 或 Android Studio。装好后手机自己就是服务器，同一 Wi-Fi 的朋友用应用里显示的
-地址或房间链接即可联机。
+首次运行会自己准备一切：依赖与素材、Android 工具链（JDK 21 / build-tools 36 / platform android-34，约
+1.5 GB，装在仓库外的 `.toolchain/`）、以及 Termux 仓库的 Node 24.18.0 与其依赖库。不需要 Gradle、Android
+Studio、AndroidX、Kotlin 或 NDK。
 
-差异与限制：使用 nodejs-mobile 的 **Node 18.20.4**（官方预编译；桌面版要求 22+，整套测试在 18 上也通过），
-官方 3D 棋盘不可用（贴图需要从本机《明日方舟》客户端提取，自动使用 2D 棋盘），APK 需自签名安装。详见
-**[mobile/README.md](mobile/README.md)**。
+差异与限制：官方 3D 棋盘不可用（贴图需要从本机《明日方舟》客户端提取，自动使用 2D 棋盘），APK 需自签名安装，
+仅支持 arm64-v8a。已在 realme RMX3820 / Android 16 上实测通过（Node 24.18.0 在手机上运行、客户端正常连入）。
+详见 **[mobile/README.md](mobile/README.md)**。
 
 ### 系统要求
 

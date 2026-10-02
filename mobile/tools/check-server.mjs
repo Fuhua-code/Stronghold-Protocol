@@ -1,15 +1,15 @@
-// mobile/tools/verify-server.mjs — boot the mobile entry point (mobile/node/main.js) on this machine and check that it
+// mobile/tools/check-server.mjs — boot the mobile entry point (mobile/node/main.js) on this machine and check that it
 // really serves the game, the way the Android WebView will use it.
 //
-//   node mobile/tools/verify-server.mjs [--public <dir>] [--data <dir>] [--json <report.json>] [--keep]
+//   node mobile/tools/check-server.mjs [--public <dir>] [--data <dir>] [--json <report.json>] [--keep]
 //
 // Checks, in order:
 //   1. the server writes its handshake file and reports ok / a port / a websocket,
 //   2. GET /healthz, /, /data.js, /sim/simdata.js, /vendor/pixi.min.js, /fonts/fonts.css (status + content type),
 //   3. gzip (Accept-Encoding) and byte-range (206) branches of the static handler,
-//   4. a real `Upgrade: websocket` handshake on /ws (101), plus the lobby's first exchange (hello → welcome),
-//   5. every `/assets/…` and `/fonts/…` URL of data/assets.json answers 200 (this is the "art is complete" gate the
-//      APK build also enforces statically).
+//   4. a real `Upgrade: websocket` handshake on /ws (101), plus the lobby's first exchange (hello -> welcome),
+//   5. every `/assets/...` and `/fonts/...` URL of data/assets.json answers 200 (this is the "art is complete" gate
+//      the APK build also enforces statically).
 //
 // Exit code 0 = everything that must work works. `--json` writes the full report; without `--keep` the child is
 // stopped at the end.
@@ -28,7 +28,7 @@ const REPO = path.resolve(HERE, '..', '..');
 const ENTRY = path.join(REPO, 'mobile', 'node', 'main.js');
 
 function parseArgs(argv) {
-  const o = { public: null, data: null, json: null, keep: false, quiet: false };
+  const o = { public: null, data: null, json: null, keep: false, quiet: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--public') o.public = argv[++i];
@@ -36,6 +36,7 @@ function parseArgs(argv) {
     else if (a === '--json') o.json = argv[++i];
     else if (a === '--keep') o.keep = true;
     else if (a === '--quiet') o.quiet = true;
+    else if (a === '--help' || a === '-h') o.help = true;
     else throw new Error(`unknown option ${a}`);
   }
   return o;
@@ -80,6 +81,7 @@ function wsHandshake(port, { keepSocket = false } = {}) {
     });
     const fail = (why) => resolve({ ok: false, why, socket: null });
     req.on('upgrade', (res, socket) => {
+      socket.on('error', () => {});
       const accept = res.headers['sec-websocket-accept'];
       const expect = crypto.createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
       if (res.statusCode !== 101 || accept !== expect) { socket.destroy(); return fail(`status ${res.statusCode}, accept ${accept === expect ? 'ok' : 'mismatch'}`); }
@@ -93,7 +95,7 @@ function wsHandshake(port, { keepSocket = false } = {}) {
   });
 }
 
-/** Encode a small client→server text frame (masked, as a browser must). */
+/** Encode a small client->server text frame (masked, as a browser must). */
 function wsFrame(text) {
   const payload = Buffer.from(text, 'utf8');
   const mask = crypto.randomBytes(4);
@@ -107,7 +109,7 @@ function wsFrame(text) {
   return Buffer.concat([header, mask, masked]);
 }
 
-/** Read one unmasked server→client text frame (the lobby's `welcome`). */
+/** Read one unmasked server->client text frame (the lobby's `welcome`). */
 function wsReadFrame(socket, timeoutMs = 8000) {
   return new Promise((resolve) => {
     let buf = Buffer.alloc(0);
@@ -131,7 +133,7 @@ function wsReadFrame(socket, timeoutMs = 8000) {
   });
 }
 
-/** Every `/assets/…` / `/fonts/…` URL in data/assets.json (the same walk as tools/setup.mjs checkAssets). */
+/** Every `/assets/...` / `/fonts/...` URL in data/assets.json (the same walk as tools/setup.mjs checkAssets). */
 function manifestUrls(node, out = []) {
   if (typeof node === 'string') { if (/^\/(assets|fonts)\//.test(node)) out.push(node); }
   else if (Array.isArray(node)) for (const x of node) manifestUrls(x, out);
@@ -155,6 +157,10 @@ async function waitForHandshake(file, child, timeoutMs = 60000) {
 
 async function main() {
   const o = parseArgs(process.argv.slice(2));
+  if (o.help) {
+    console.log('node mobile/tools/check-server.mjs [--public <dir>] [--data <dir>] [--json <report.json>] [--keep] [--quiet]');
+    return 0;
+  }
   const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'sp-mobile-'));
   const handshakeFile = path.join(tmp, 'handshake.json');
   const args = [ENTRY, '--port', '0', '--handshake', handshakeFile];
@@ -224,7 +230,7 @@ async function main() {
     const hs2 = await wsHandshake(port, { keepSocket: true });
     check('Upgrade /ws → 101 with correct accept', hs2.ok, hs2.why);
     if (hs2.ok && hs2.socket) {
-      hs2.socket.write(wsFrame(JSON.stringify({ t: 'hello', rid: 1, name: 'verify', v: 1 })));
+      hs2.socket.write(wsFrame(JSON.stringify({ t: 'hello', rid: 1, name: 'check', v: 1 })));
       let frame = await wsReadFrame(hs2.socket);
       if (frame && frame.ping) frame = await wsReadFrame(hs2.socket); // skip a heartbeat ping
       let msg = null;
@@ -243,7 +249,7 @@ async function main() {
     } else {
       const missing = [];
       const t0 = Date.now();
-      // A handful at a time: the server gzips small files on demand and a serial walk of ~1000 files is slow.
+      // A handful at a time: the server gzips small files on demand and a serial walk of ~4000 files is slow.
       const CONC = 8;
       for (let i = 0; i < urls.length; i += CONC) {
         const batch = urls.slice(i, i + CONC);

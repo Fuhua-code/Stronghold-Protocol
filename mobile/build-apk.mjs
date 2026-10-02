@@ -1,21 +1,31 @@
 #!/usr/bin/env node
-// mobile/build-apk.mjs — build the Android APK of 卫戍协议：盟约 from this repository.
+// mobile/build-apk.mjs — the Android packager: turn this repository into a standalone Android APK.
 //
-//   node mobile/build-apk.mjs [options]
+//   node mobile/build-apk.mjs                 build the APK (prepares everything it needs on the first run)
+//   node mobile/build-apk.mjs --prepare       only prepare (toolchain + Termux Node runtime + assets tree)
+//   node mobile/build-apk.mjs --check         build nothing: verify the toolchain, the runtime, the art and the module graph
+//
+//   npm run apk            (same as the first line)
+//   npm run apk:prepare    (same as --prepare)
+//   npm run apk:check      (same as --check)
 //
 //     --abi=<list>        ABI to package (default arm64-v8a; arm64 is what the Termux packages provide)
 //     --out=<file>        output APK path (default mobile/build/Stronghold-Protocol-<version>-android.apk)
 //     --with-dev          also package public/dev (the in-browser dev harnesses; not needed to play)
-//     --no-node           skip the Node runtime (a client-only APK that must point at a real server)
+//     --fetch-assets      download the game art even if it is present, and never ask
+//     --no-fetch-assets   never download the game art (fail with instructions instead)
 //     --skip-dex          skip javac/d8 (fast iteration on the packaged assets)
-//     --no-download       never download missing toolchain pieces (fail instead)
+//     --no-node           skip the Node runtime (a client-only APK that must point at a real server)
+//     --no-download       never download toolchain pieces outside `npm install` / the art step (fail instead)
 //     --toolchain=<dir>   toolchain root (default <workspace>/.toolchain, then <repo>/.toolchain)
 //     --json=<file>       write a build report
 //     -h, --help          this text
 //
 // What it does, in order (see mobile/README.md):
-//   1. require a prepared repository (node_modules, public/vendor, public/assets, data/*.json) and, unless
-//      --no-download, fetch the missing pieces of the Android toolchain (JDK, cmdline-tools, build-tools, platform)
+//   0. one-command setup: `npm install` when node_modules is missing, `tools/fetch-assets.mjs` when the art is
+//      missing (skipped with --no-fetch-assets), so a fresh clone needs nothing else;
+//   1. require a prepared repository (public/vendor, public/assets, data/*.json) and, unless --no-download,
+//      fetch the missing pieces of the Android toolchain (JDK, cmdline-tools, build-tools, platform)
 //      into the toolchain directory;
 //   2. fetch the Node runtime — **Termux's Node 24 LTS** (`nodejs-lts` plus its libraries: libc++, openssl,
 //      c-ares, libicu, libsqlite, zlib) from packages.termux.dev — into `mobile/build/runtime/`;
@@ -942,6 +952,8 @@ function parseArgs(argv) {
     // last decade (including this project's own test phone).
     abis: ['arm64-v8a'],
     out: null, withDev: false, node: true, dex: true, download: true, toolchain: null, json: null, help: false,
+    mode: 'build',            // 'build' | 'prepare' | 'check'
+    fetchAssets: 'ask',       // 'ask' | 'always' | 'never'
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -958,12 +970,54 @@ function parseArgs(argv) {
     else if (key === '--no-download') o.download = false;
     else if (key === '--toolchain') o.toolchain = path.resolve(value());
     else if (key === '--json') o.json = value();
+    else if (key === '--prepare' || key === '--prepare-only') o.mode = 'prepare';
+    else if (key === '--check' || key === '--selftest') o.mode = 'check';
+    else if (key === '--fetch-assets') o.fetchAssets = 'always';
+    else if (key === '--no-fetch-assets') o.fetchAssets = 'never';
     else if (key === '--help' || key === '-h') o.help = true;
     else throw new Error(`unknown option ${a} (try --help)`);
   }
   if (!o.abis.length) o.abis = ['arm64-v8a'];
   if (!o.node) o.abis = [];
+  if (o.mode === 'check') o.fetchAssets = 'never';
   return o;
+}
+
+/**
+ * Step 0 of the one-command flow: make a fresh clone ready without the user running anything else.
+ *
+ *   * `npm install` when node_modules (or the vendored client libraries) is missing;
+ *   * `node tools/fetch-assets.mjs` when the art is missing — ~250 MB, resumable, and skipped entirely with
+ *     `--no-fetch-assets`. Without art the game still runs, but with placeholder visuals, so the packager asks
+ *     before doing it in a terminal and simply does it when it is not a terminal (CI, `npm run apk`).
+ */
+async function ensureRepositoryReady(o) {
+  const missing = [];
+  for (const [what, rel] of [['node_modules', 'node_modules'], ['public/vendor', 'public/vendor'], ['data/chess.json', 'data/chess.json']]) {
+    if (!exists(path.join(REPO, rel))) missing.push(what);
+  }
+  if (missing.length && !o.download) fail(`missing ${missing.join(', ')} — run \`npm install\` first (or drop --no-download)`);
+  if (missing.length) {
+    step('0', `preparing the repository (${missing.join(', ')} missing)`);
+    const r = run('npm', ['install', '--no-audit', '--no-fund'], { env: { npm_config_loglevel: 'warn' }, allowFail: true });
+    if (!r.ok) fail('`npm install` failed — run it by hand to see the error');
+    for (const [what, rel] of [['node_modules', 'node_modules'], ['public/vendor', 'public/vendor']]) {
+      if (!exists(path.join(REPO, rel))) fail(`${what} is still missing after npm install`);
+    }
+    ok('dependencies installed (public/vendor populated by the postinstall)');
+  }
+
+  const assets = path.join(REPO, 'public', 'assets');
+  const haveArt = exists(assets) && fs.readdirSync(assets).length > 0;
+  if (haveArt && o.fetchAssets !== 'always') return;
+  if (o.fetchAssets === 'never') {
+    if (!haveArt) warn('public/assets is missing: the APK will fall back to placeholder visuals (--no-fetch-assets)');
+    return;
+  }
+  step('0b', haveArt ? 'refreshing the game art' : 'downloading the game art (~250 MB, resumable)');
+  const r = run(process.execPath, [path.join(REPO, 'tools', 'fetch-assets.mjs')], { allowFail: true });
+  if (!r.ok || !exists(assets)) warn('the art download did not finish: the APK will use placeholder visuals (re-run to resume)');
+  else ok('game art ready');
 }
 
 function help() {
@@ -971,6 +1025,122 @@ function help() {
   const start = src.findIndex((l) => l.startsWith('//   node mobile/build-apk.mjs'));
   const end = src.findIndex((l, i) => i > start && l.startsWith('// Nothing outside'));
   return src.slice(start, end).map((l) => l.replace(/^\/\/ ?/, '')).join('\n');
+}
+
+/**
+ * `--check`: verify without building. This is the "is this clone able to produce an APK?" question, answered
+ * against the *local* files (module graph, art completeness, manifest resource references, platform binaries).
+ */
+async function selfCheck(o) {
+  const checks = [];
+  const check = (name, fn) => {
+    try {
+      const detail = fn();
+      checks.push({ name, ok: true, detail: detail || '' });
+      ok(`${name}${detail ? ` — ${detail}` : ''}`);
+    } catch (e) {
+      checks.push({ name, ok: false, detail: e.message });
+      log(`\x1b[31m  ✘\x1b[0m ${name} — ${e.message}`);
+    }
+  };
+  const need = (cond, msg) => { if (!cond) throw new Error(msg); };
+  const readJson = (p) => JSON.parse(fs.readFileSync(p, 'utf8'));
+
+  log(`\n\x1b[1m卫戍协议：盟约 · Android packager self-check\x1b[0m  (${REPO})`);
+  step('check', 'repository, runtime sources, art and module graph');
+
+  check('node version (>= 22, matching package.json engines)', () => {
+    const major = Number(process.versions.node.split('.')[0]);
+    need(major >= 22, `node ${process.versions.node} is too old`);
+    return `node ${process.versions.node}`;
+  });
+  check('package.json name/version', () => {
+    const pkg = readJson(path.join(REPO, 'package.json'));
+    need(pkg.main === 'server/index.js', `unexpected main: ${pkg.main}`);
+    return `${pkg.name} v${pkg.version}`;
+  });
+  check('server + shared + client sources', () => {
+    for (const rel of ['server/index.js', 'server/net.js', 'shared/constants.js', 'shared/protocol.js', 'public/index.html', 'public/js/main.js', 'data/chess.json']) {
+      need(exists(path.join(REPO, rel)), `missing ${rel}`);
+    }
+    return 'server/, shared/, public/, data/ present';
+  });
+  check('vendored client libraries (public/vendor)', () => {
+    for (const f of ['pixi.min.js', 'pixi-spine.js', 'preact.module.js', 'hooks.module.js', 'htm.module.js']) {
+      need(exists(path.join(REPO, 'public', 'vendor', f)), `missing public/vendor/${f} — run npm install`);
+    }
+    return 'pixi, pixi-spine, preact, htm';
+  });
+  check('server dependency `ws` (resolvable from server/index.js)', () => {
+    const ws = path.join(REPO, 'node_modules', 'ws');
+    need(exists(path.join(ws, 'package.json')), 'node_modules/ws is missing — run npm install');
+    const pkg = readJson(path.join(ws, 'package.json'));
+    for (const [, target] of Object.entries(pkg.exports || {})) {
+      const rel = typeof target === 'string' ? target : (target && (target.import || target.require || target.default));
+      if (typeof rel === 'string') need(exists(path.join(ws, rel)), `ws export ${rel} is not installed`);
+    }
+    return `ws v${pkg.version} with its export map intact`;
+  });
+  check('game art complete (data/assets.json)', () => {
+    const manifest = readJson(path.join(REPO, 'data', 'assets.json'));
+    const urls = [...new Set(manifestUrls(manifest))];
+    need(urls.length > 0, 'data/assets.json lists no art');
+    const missing = urls.filter((u) => {
+      const p = path.join(REPO, 'public', ...u.split('/').filter(Boolean).map(decodeURIComponent));
+      try { return !fs.statSync(p).size; } catch { return true; }
+    });
+    need(missing.length === 0, `${missing.length}/${urls.length} art files missing — run node tools/fetch-assets.mjs (e.g. ${missing.slice(0, 3).join(', ')})`);
+    return `${urls.length} files`;
+  });
+  check('Android resources and activity', () => {
+    for (const rel of ['android/java/io/prts/stronghold/MainActivity.java', 'android/res/mipmap-mdpi/ic_launcher.png', 'android/res/mipmap-xxxhdpi/ic_launcher.png', 'tools/make-icons.mjs', 'node/main.js']) {
+      need(exists(path.join(HERE, rel)), `missing mobile/${rel}`);
+    }
+    return 'MainActivity, launcher icons, mobile entry point';
+  });
+  check('packaged runtime sources (Termux packages)', () => {
+    const node = TERMUX.packages.find((p) => p.bins);
+    need(!!node, 'no Node package configured');
+    const libs = TERMUX.packages.flatMap((p) => Object.values(p.libs || {}));
+    for (const need_ of ['libc++_shared.so', 'libcrypto.so.3', 'libssl.so.3', 'libicudata.so.78', 'libcares.so', 'libsqlite3.so', 'libz.so.1']) {
+      need(libs.includes(need_), `runtime library ${need_} is not configured`);
+    }
+    return `${node.pkg} + ${libs.length} libraries from ${TERMUX.base.replace(/^https?:\/\//, '')}`;
+  });
+  check('Android SDK toolchain', () => {
+    if (!o.download) return 'skipped (--no-download)';
+    const toolchain = resolveToolchain(o.toolchain);
+    const jdk = findJavaHome(toolchain);
+    need(!!jdk, `no JDK 17+ found (looked in ${toolchain}/jdk and the usual places)`);
+    const bt = path.join(toolchain, 'android-sdk', 'build-tools', TOOLS.buildTools);
+    const jar = path.join(toolchain, 'android-sdk', 'platforms', TOOLS.platform, 'android.jar');
+    if (!exists(bt) || !exists(jar)) return `JDK ok; SDK not installed yet (first build fetches build-tools ${TOOLS.buildTools} + ${TOOLS.platform})`;
+    for (const f of ['aapt2.exe', 'd8.bat', 'zipalign.exe', 'apksigner.bat']) {
+      const p = path.join(bt, f);
+      const alt = path.join(bt, f.replace(/\.(exe|bat)$/, ''));
+      need(exists(p) || exists(alt), `build-tools ${TOOLS.buildTools} is incomplete (${f})`);
+    }
+    return `JDK ${jdk.version}, build-tools ${TOOLS.buildTools}, ${TOOLS.platform}`;
+  });
+  check('host tools for the runtime unpack (tar, xz)', () => {
+    for (const tool of ['tar', 'xz']) {
+      const r = run(tool, ['--version'], { capture: true, allowFail: true });
+      need(r.ok, `\`${tool}\` is not available on PATH (needed to unpack the Termux packages)`);
+    }
+    return 'tar + xz';
+  });
+  check('code signing key', () => (exists(KEYSTORE) ? 'mobile/keystore/debug.keystore (generated)' : 'will be generated on the first build'));
+
+  const failed = checks.filter((c) => !c.ok);
+  log(`\n${failed.length ? `\x1b[31m✘ ${failed.length} of ${checks.length} checks failed\x1b[0m` : `\x1b[32m✔ all ${checks.length} checks passed — \`npm run apk\` will produce a signed APK\x1b[0m`}\n`);
+  return { ok: failed.length === 0, checks };
+}
+
+/** The toolchain root: --toolchain, else $SP_TOOLCHAIN, else <workspace>/.toolchain, else <repo>/.toolchain. */
+function resolveToolchain(explicit) {
+  if (explicit) return explicit;
+  return [process.env.SP_TOOLCHAIN, path.join(path.dirname(REPO), '.toolchain'), path.join(REPO, '.toolchain')]
+    .find((d) => d && exists(d)) || path.join(path.dirname(REPO), '.toolchain');
 }
 
 async function main() {
@@ -981,17 +1151,25 @@ async function main() {
   const t0 = Date.now();
   const pkg = JSON.parse(await fsp.readFile(path.join(REPO, 'package.json'), 'utf8'));
   APP.versionName = pkg.version;
-  const toolchain = o.toolchain
-    || [process.env.SP_TOOLCHAIN, path.join(path.dirname(REPO), '.toolchain'), path.join(REPO, '.toolchain')].find((d) => d && exists(d))
-    || path.join(path.dirname(REPO), '.toolchain');
+  const toolchain = resolveToolchain(o.toolchain);
   await fsp.mkdir(BUILD, { recursive: true });
 
-  const report = { startedAt: new Date().toISOString(), repo: REPO, toolchain, abis: o.abis, node: process.versions.node, steps: [] };
+  if (o.mode === 'check') {
+    const result = await selfCheck(o);
+    if (o.json) await fsp.writeFile(path.resolve(o.json), JSON.stringify({ ...result, at: new Date().toISOString() }, null, 1));
+    return result.ok ? 0 : 1;
+  }
+
+  const report = { startedAt: new Date().toISOString(), repo: REPO, toolchain, abis: o.abis, node: process.versions.node, mode: o.mode, steps: [] };
   const record = (name, data) => { report.steps.push({ name, ...data }); };
 
   log(`\n\x1b[1m卫戍协议：盟约 · Android APK\x1b[0m  v${APP.versionName}   (${REPO})`);
   log(`  toolchain: ${toolchain}`);
   log(`  ABIs:      ${o.abis.join(', ') || '(none: client-only APK)'}`);
+  log(`  mode:      ${o.mode}`);
+
+  // 0. one-command setup: dependencies and the game art
+  await ensureRepositoryReady(o);
 
   // 0. prerequisites
   step('1', 'checking the repository is prepared');
@@ -1020,6 +1198,19 @@ async function main() {
   step('3', 'assembling assets/nodejs-project');
   const prepared = await prepareNodejsProject({ withDev: o.withDev });
   const artUrls = await assertArtComplete(prepared.dir);
+
+  if (o.mode === 'prepare') {
+    const size = await dirSize(prepared.dir);
+    const rt = runtime ? (await dirSize(path.join(BUILD, 'runtime', o.abis[0]))) : { bytes: 0, files: 0 };
+    log(`\n\x1b[32m\x1b[1m✔ preparation complete\x1b[0m`);
+    log(`  toolchain   ${toolchain}`);
+    log(`  runtime     Node ${runtime ? runtime.node : '(skipped)'} · ${rt.files} files · ${bytes(rt.bytes)}`);
+    log(`  packaged    ${size.files} files · ${bytes(size.bytes)} (assets/nodejs-project)`);
+    log(`  next        node mobile/build-apk.mjs          build the APK`);
+    log(`              node mobile/build-apk.mjs --check  verify without building\n`);
+    if (o.json) await fsp.writeFile(path.resolve(o.json), JSON.stringify({ ...report, prepared: { files: size.files, bytes: size.bytes }, runtime: runtime ? runtime.node : null }, null, 1));
+    return 0;
+  }
 
   // 4. android project
   step('4', 'writing the Android project (manifest, resources, sources)');
