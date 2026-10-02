@@ -1,18 +1,20 @@
 #!/usr/bin/env node
 // mobile/build-apk.mjs — the Android packager: turn this repository into a standalone Android APK.
 //
-//   node mobile/build-apk.mjs                 build the APK (prepares everything it needs on the first run)
+//   node mobile/build-apk.mjs                 build the APK (arm64-v8a, i.e. phones)
+//   node mobile/build-apk.mjs --all-abis      build for phones **and** x86_64 emulators in one APK
 //   node mobile/build-apk.mjs --prepare       only prepare (toolchain + Termux Node runtime + assets tree)
 //   node mobile/build-apk.mjs --check         build nothing: verify the toolchain, the runtime, the art and the module graph
 //
-//   npm run apk            (same as the first line)
+//   npm run apk            (same as the first line)      → …-arm64-v8a.apk
+//   npm run apk:all        (same as --all-abis)          → …-arm64-v8a-x86_64.apk
 //   npm run apk:prepare    (same as --prepare)
 //   npm run apk:check      (same as --check)
 //
-//     --abi=<list>        ABI list to package (default arm64-v8a,x86_64: phones are arm64, the usual Android
-//                         emulators — MuMu, LDPlayer, BlueStacks, the AOSP images — are x86_64, and Android only
-//                         unpacks the `lib/<abi>/` directories that match its own ABI, so both are shipped)
-//     --out=<file>        output APK path (default mobile/build/Stronghold-Protocol-<version>-android.apk)
+//     --all-abis          package arm64-v8a **and** x86_64 (adds ~88 MB; for MuMu, LDPlayer, BlueStacks, the
+//                         Google AOSP/Play images — every one of them is x86_64)
+//     --abi=<list>        explicit ABI list; overrides --all-abis (arm64-v8a, x86_64)
+//     --out=<file>        output APK path (default: the file name carries the ABIs it contains)
 //     --with-dev          also package public/dev (the in-browser dev harnesses; not needed to play)
 //     --fetch-assets      download the game art even if it is present, and never ask
 //     --no-fetch-assets   never download the game art (fail with instructions instead)
@@ -22,6 +24,10 @@
 //     --toolchain=<dir>   toolchain root (default <workspace>/.toolchain, then <repo>/.toolchain)
 //     --json=<file>       write a build report
 //     -h, --help          this text
+//
+// Why arm64 only by default: a phone only ever needs its own ABI, and Android unpacks just the `lib/<abi>/`
+// directory that matches the device — so the extra copy is dead weight (88 MB) on the phone. Emulator users opt in
+// with `--all-abis`, which writes a differently named file so both variants can sit side by side.
 //
 // What it does, in order (see mobile/README.md):
 //   0. one-command setup: `npm install` when node_modules is missing, `tools/fetch-assets.mjs` when the art is
@@ -106,8 +112,10 @@ const ABI_ALIASES = {
   x86_64: 'x86_64', x64: 'x86_64', amd64: 'x86_64',
 };
 const ABI_TERMUX = { 'arm64-v8a': 'aarch64', x86_64: 'x86_64' };
-/** Default: phones and emulators both work out of the box. */
-const DEFAULT_ABIS = ['arm64-v8a', 'x86_64'];
+/** Phones are arm64; x86_64 (emulators) is opt-in through `--all-abis`. */
+const DEFAULT_ABIS = ['arm64-v8a'];
+/** What `--all-abis` packages: phones **and** every mainstream Android emulator. */
+const ALL_ABIS = ['arm64-v8a', 'x86_64'];
 
 /**
  * The shared libraries the runtime needs, under the names they get **after** `patch-elf-sonames.mjs` has made them
@@ -974,10 +982,11 @@ async function verifyApk(apk, { apksigner, aapt2, abis, expectedArt, expectNode 
 
 function parseArgs(argv) {
   const o = {
-    // Phones are arm64, the usual Android emulators (MuMu, LDPlayer, BlueStacks, AOSP/Play images) are x86_64;
-    // Android only unpacks the `lib/<abi>/` directories that match the device, so shipping both works everywhere
-    // and costs ~60 MB. Narrow it with `--abi=arm64-v8a` for a phone-only build.
+    // arm64-v8a only by default: that is what a phone needs, and Android ignores the other ABIs anyway, so the
+    // x86_64 copy (emulators) is opt-in via --all-abis — it adds ~88 MB and only matters for MuMu/LDPlayer/
+    // BlueStacks/the AOSP images. `--abi=<list>` overrides both.
     abis: [...DEFAULT_ABIS],
+    explicitAbis: false,
     out: null, withDev: false, node: true, dex: true, download: true, toolchain: null, json: null, help: false,
     mode: 'build',            // 'build' | 'prepare' | 'check'
     fetchAssets: 'ask',       // 'ask' | 'always' | 'never'
@@ -989,7 +998,8 @@ function parseArgs(argv) {
     const inline = eq >= 0 ? a.slice(eq + 1) : undefined;
     // `--out <file>` and `--out=<file>` are both accepted; a flag value is never another `--flag`
     const value = () => (inline !== undefined ? inline : (argv[i + 1] !== undefined && !String(argv[i + 1]).startsWith('--') ? argv[++i] : ''));
-    if (key === '--abi') o.abis = String(value() || '').split(',').map((s) => ABI_ALIASES[s.trim()]).filter(Boolean);
+    if (key === '--abi') { o.abis = String(value() || '').split(',').map((s) => ABI_ALIASES[s.trim()]).filter(Boolean); o.explicitAbis = true; }
+    else if (key === '--all-abis' || key === '--abis' || key === '--with-x86' || key === '--x86') o.abis = [...ALL_ABIS];
     else if (key === '--out') o.out = value();
     else if (key === '--with-dev') o.withDev = true;
     else if (key === '--no-node' || key === '--no-nodejs-mobile') o.node = false;
@@ -1324,7 +1334,10 @@ async function main() {
 
   // 8. package the APK: aapt2's manifest/resources/icons + classes.dex + lib/** + assets/nodejs-project/**
   step('8', 'packaging (manifest, res/**, resources.arsc, classes.dex, lib/**, assets/**)');
-  const apkOut = o.out ? path.resolve(o.out) : path.join(BUILD, `Stronghold-Protocol-${APP.versionName}-android.apk`);
+  // The file name carries the ABIs it actually contains, so the phone build and the phone+emulator build can sit
+  // in the same directory without overwriting each other.
+  const abiTag = o.abis.length ? o.abis.join('-') : 'client-only';
+  const apkOut = o.out ? path.resolve(o.out) : path.join(BUILD, `Stronghold-Protocol-${APP.versionName}-${abiTag}.apk`);
   await fsp.mkdir(path.dirname(apkOut), { recursive: true });
   await fsp.rm(apkOut, { force: true });
   const extra = [{ name: 'classes.dex', data: await fsp.readFile(path.join(dexDir, 'classes.dex')) }];
@@ -1393,7 +1406,11 @@ async function main() {
   log(`  sha256    ${sha}`);
   log(`  version   ${APP.versionName} (${APP.package}), ABIs ${o.abis.join(', ') || 'none'}`);
   log(`  install   adb install -r "${apkOut}"   (or copy it to the phone and open it)`);
-  log(`  sums      ${path.relative(REPO, sums)}\n`);
+  log(`  sums      ${path.relative(REPO, sums)}`);
+  if (!o.explicitAbis && o.abis.length === 1 && o.abis[0] === 'arm64-v8a') {
+    log(`  \x1b[2mfor an Android emulator (x86_64) build both ABIs: npm run apk:all\x1b[0m`);
+  }
+  log('');
   return 0;
 }
 

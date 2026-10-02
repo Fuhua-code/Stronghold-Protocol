@@ -210,10 +210,11 @@ section('5. 安卓设备（可选）/ device');
     }
     const apk = fs.existsSync(path.join(BUILD))
       ? fs.readdirSync(path.join(BUILD))
-        .filter((f) => /^Stronghold-Protocol-.*-android\.apk$/.test(f)) // the shipped artifact, not app-unsigned.apk
+        // the shipped artifacts (`Stronghold-Protocol-<version>-<abis>.apk`), not the intermediate app-unsigned.apk
+        .filter((f) => /^Stronghold-Protocol-.*\.apk$/.test(f) && !/unsigned/.test(f))
         .map((f) => path.join(BUILD, f))
       : [];
-    line(apk.length ? 'ok' : 'skip', '已构建的 APK', apk.length ? apk.map((p) => `${path.basename(p)} (${mb(fs.statSync(p).size)})`).join(', ') : '尚未构建');
+    line(apk.length ? 'ok' : 'skip', '已构建的 APK', apk.length ? apk.map((p) => `${path.basename(p)} (${mb(fs.statSync(p).size)})`).join(', ') : '尚未构建（npm run apk）');
   }
 }
 
@@ -227,11 +228,12 @@ if (findings.length === 0) {
 } else {
   for (const f of findings) console.log(c.bad(`  ✘ ${f.label} — ${f.detail}`));
 }
-console.log(c.dim('  npm run apk           构建 APK（首次会自动准备工具链、运行时与素材）'));
+console.log(c.dim('  npm run apk           构建 APK（默认 arm64-v8a，手机用）'));
+console.log(c.dim('  npm run apk:all       同时打包 arm64-v8a + x86_64（模拟器用，体积 +88 MB）'));
 console.log(c.dim('  npm run apk:prepare   只准备，不打 APK'));
 console.log(c.dim('  npm run apk:check     自检：不构建，只验证'));
 console.log(c.dim('  npm run apk:verify    构建后再跑三项验证（服务器 / APK / 浏览器）'));
-console.log(c.dim('  adb install -r mobile/build/Stronghold-Protocol-<版本>-android.apk'));
+console.log(c.dim('  adb install -r mobile/build/Stronghold-Protocol-<版本>-<abi>.apk'));
 console.log('');
 
 process.exit(findings.length === 0 ? 0 : 1);

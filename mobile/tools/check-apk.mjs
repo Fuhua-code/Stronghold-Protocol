@@ -47,10 +47,15 @@ function parseArgs(argv) {
   if (!o.apk) {
     const dir = path.join(REPO, 'mobile', 'build');
     const all = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.apk')) : [];
-    // the shipped artifact is `Stronghold-Protocol-<version>-android.apk`; `app-unsigned.apk` is a build leftover
-    const shipped = all.filter((f) => /^Stronghold-Protocol-.*-android\.apk$/.test(f));
-    const candidates = (shipped.length ? shipped : all).map((f) => path.join(dir, f));
-    if (candidates.length !== 1) throw new Error(`found ${candidates.length} APKs (${all.join(', ')}); pass --apk=<file>`);
+    // the shipped artifacts are `Stronghold-Protocol-<version>-<abis>.apk`; `app-unsigned.apk` is a build leftover
+    const shipped = all.filter((f) => /^Stronghold-Protocol-.*\.apk$/.test(f) && !/unsigned/.test(f));
+    // prefer the arm64-only build when both variants are present (that is the default `npm run apk` output)
+    const preferred = shipped.filter((f) => /-arm64-v8a\.apk$/.test(f));
+    const pick = preferred.length ? preferred : shipped;
+    const candidates = pick.map((f) => path.join(dir, f));
+    if (candidates.length !== 1) {
+      throw new Error(`${candidates.length} APK variants match (${pick.join(', ')}); pass --apk=<file> to pick one`);
+    }
     o.apk = candidates[0];
   }
   return o;
@@ -173,12 +178,12 @@ async function main() {
   const report = { apk: o.apk, startedAt: new Date().toISOString(), checks: [], failures: [] };
   const check = (name, ok, detail = '') => {
     report.checks.push({ name, ok: !!ok, detail: String(detail).slice(0, 300) });
-    console.log(`${ok ? '  ok  ' : ' FAIL '} ${name}${detail ? `  —${String(detail).slice(0, 180)}` : ''}`);
+    console.log(`${ok ? '  ok  ' : ' FAIL '} ${name}${detail ? `  — ${String(detail).slice(0, 180)}` : ''}`);
     if (!ok) report.failures.push(name);
     return !!ok;
   };
 
-  console.log(`\n鈻?verifying ${path.relative(REPO, o.apk)}`);
+  console.log(`\n▶ verifying ${path.relative(REPO, o.apk)}`);
   const zip = await readZip(o.apk);
   const byName = new Map(zip.entries.map((e) => [e.name, e]));
   report.entries = zip.entries.length;

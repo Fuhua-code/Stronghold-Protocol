@@ -11,8 +11,13 @@ npm run apk
 （取决于网速）；之后重跑只需十几秒到一分钟。产物：
 
 ```
-mobile/build/Stronghold-Protocol-0.1.0-android.apk     约 352 MB，v2+v3 已签名
+mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a.apk     约 352 MB，v2+v3 已签名（默认：手机）
+mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a-x86_64.apk   约 440 MB（npm run apk:all：手机 + 模拟器）
 ```
+
+文件名带 ABI，所以两种包可以在同一目录并存、互不覆盖。默认只打 arm64（手机就只需要自己那一套 ABI，Android 也
+只会解压与设备相符的 `lib/<abi>/`）；要在 **x86_64 模拟器**（MuMu / 雷电 / 蓝叠 / Google AOSP 镜像）上跑，加
+`npm run apk:all`。
 
 > 这是玩家自制的**非官方同人作品**，与鹰角网络、Yostar 无关；《明日方舟》及「卫戍协议」相关素材版权归原权
 > 利人所有，**不适用**本项目的 GPL，仅供学习交流与个人非商业使用，**严禁任何形式的盈利**。APK 请勿上架
@@ -24,17 +29,20 @@ mobile/build/Stronghold-Protocol-0.1.0-android.apk     约 352 MB，v2+v3 已签
 
 | 命令 | 作用 |
 |---|---|
-| `npm run apk` | **一键**：准备 + 构建 + 签名 + 核验，产出 APK |
+| `npm run apk` | **一键**：准备 + 构建 + 签名 + 核验，产出 APK（默认仅 arm64-v8a，手机用） |
+| `npm run apk:all` | 同上，但同时打包 **arm64-v8a + x86_64**（模拟器用，+88 MB，文件名带 ABI） |
 | `npm run apk:doctor` | 体检：主机、仓库、运行时来源、工具链、已连接手机，逐项给结论与下一步 |
 | `npm run apk:check` | 自检：**不构建**，只验证「这个克隆能不能出包」（11 项） |
 | `npm run apk:prepare` | 只准备（工具链 + Node 运行时 + 待打包目录），不打 APK |
 | `npm run apk:verify` | 构建后跑三项验证：服务器自检 → APK 解包实跑 → 无头浏览器点到休整期 |
-| `adb install -r mobile/build/Stronghold-Protocol-0.1.0-android.apk` | 装到手机 |
+| `adb install -r mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a.apk` | 装到手机 |
 | `adb logcat -s StrongholdProtocol` | 看应用与 Node 的日志 |
 
 `mobile/build-apk.mjs` 也直接接受参数：
 
 ```bash
+node mobile/build-apk.mjs --all-abis              # 等于 npm run apk:all（arm64 + x86_64）
+node mobile/build-apk.mjs --abi=x86_64            # 只打模拟器用的那一套
 node mobile/build-apk.mjs --check                 # 等于 npm run apk:check
 node mobile/build-apk.mjs --prepare               # 等于 npm run apk:prepare
 node mobile/build-apk.mjs --with-dev              # 额外带上 public/dev 开发页
@@ -132,18 +140,18 @@ assets/nodejs-project/
 | 5. 横屏 | 游戏需要横屏；应用已锁定横屏。 |
 
 **系统要求**：Android 7.0（API 24）或更高、**arm64-v8a（手机）或 x86_64（模拟器）**、系统 WebView 可更新。
-手机上需要约 **750 MB** 空闲空间（安装包 440 MB + 首次解压 262 MB）；只做手机包可用 `--abi=arm64-v8a`，
-安装包约 352 MB。
+手机上需要约 **650 MB** 空闲空间（默认安装包 352 MB + 首次解压 262 MB）；`npm run apk:all` 的双版本包为
+440 MB。
 
 **在安卓模拟器上跑**（MuMu / LDPlayer / BlueStacks / Google AOSP 镜像都是 x86_64）：
 
 ```bash
-npm run apk                                # 默认同时打 arm64-v8a 与 x86_64
+npm run apk:all                            # 手机 + 模拟器：一个 APK 里带两套运行时
 adb connect 127.0.0.1:5555                 # MuMu 的调试端口（模拟器界面里可查；蓝叠/雷电常用 5555 / 7555）
-adb -s 127.0.0.1:5555 install -r mobile/build/Stronghold-Protocol-0.1.0-android.apk
+adb -s 127.0.0.1:5555 install -r mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a-x86_64.apk
 ```
 
-同一个 APK 带两套运行时，Android 只解压与自己 ABI 相符的那一套，手机与模拟器通吃（代价是体积 +88 MB）。
+也可以 `npm run apk && node mobile/build-apk.mjs --abi=x86_64` 分别出两个单 ABI 的包（各约 352 MB）。
 模拟器内存建议 4 GB 以上（战斗在 WebView 里模拟）。
 
 **与桌面版的差异**
@@ -187,7 +195,7 @@ mobile/                        ← 打包器（本分支新增，其他文件与
 在 **realme RMX3820 · Android 16（API 36）· arm64-v8a** 上实测：
 
 ```
-adb install -r mobile/build/Stronghold-Protocol-0.1.0-android.apk    # Success
+adb install -r mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a.apk    # Success
 adb shell am start -n io.prts.stronghold/.MainActivity
 
 copy: apkChanged=true needCode=true needArt=true
@@ -218,7 +226,7 @@ WebView loading http://127.0.0.1:37305/
 
 ```
 adb connect 127.0.0.1:5555
-adb -s 127.0.0.1:5555 install -r mobile/build/Stronghold-Protocol-0.1.0-android.apk    # Success
+adb -s 127.0.0.1:5555 install -r mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a-x86_64.apk    # Success
 # 解压出的运行时（MuMu 只解压与自己 ABI 相符的一套）
 lib/x86_64/: libnode.so libc++_shared.so libcrypto.so libssl.so libicuuc.so libicui18n.so
              libicudata.so libcares.so libsqlite3.so libz.so
@@ -243,7 +251,7 @@ lib/x86_64/: libnode.so libc++_shared.so libcrypto.so libssl.so libicuuc.so libi
 | 报 `xz is not available` | 解包 Termux 包需要 `xz`；Windows 10+ 自带 `tar`，`xz` 可用 `winget install xz` / `scoop install xz` 安装。 |
 | 报 `no JDK 17+ found` 且无法下载 | 用 `--toolchain=<目录>` 指向已有 JDK/SDK，或设置 `JAVA_HOME`。 |
 | 安装时报「签名不一致」 | 之前装过别的密钥签名的版本：`adb uninstall io.prts.stronghold` 后重装。 |
-| 卡在「正在解压美术与音频…」 | 正常，约 4000 个文件 / 262 MB；确认手机剩余空间 ≥ 750 MB（手机包）/ 440 MB（安装包本身）。 |
+| 卡在「正在解压美术与音频…」 | 正常，约 4000 个文件 / 262 MB；确认手机剩余空间 ≥ 650 MB（默认 352 MB 安装包 + 262 MB 解压；双版本包为 440 MB）。 |
 | 卡在「正在启动本机服务器…」后显示错误页 | `adb logcat -s StrongholdProtocol` 看 Node 报错；多为素材解压不完整 →「设置 → 应用 → 清除数据」后重开。 |
 | 「Node 运行时缺失」 | ① APK 用 `--no-node` 构建的客户端壳 → 用默认参数重建；② 设备 ABI 不在包里（错误信息会列出包内 ABI 与本机 ABI）→ 加 `--abi=` 重建。模拟器请用默认双 ABI 构建。 |
 | 朋友连不上 | 确认在同一 Wi-Fi；访客网络常开「AP 隔离」会禁止设备互访；把日志里的局域网地址或房间链接发给对方即可。 |

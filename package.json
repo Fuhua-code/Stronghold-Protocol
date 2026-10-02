@@ -34,6 +34,7 @@
     "doctor": "node tools/doctor.mjs",
     "launch": "node scripts/launch.mjs",
     "apk": "node mobile/build-apk.mjs",
+    "apk:all": "node mobile/build-apk.mjs --all-abis",
     "apk:prepare": "node mobile/build-apk.mjs --prepare",
     "apk:check": "node mobile/build-apk.mjs --check",
     "apk:doctor": "node mobile/tools/doctor.mjs",
