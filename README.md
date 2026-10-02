@@ -90,6 +90,25 @@ npm start          # 启动服务器：http://localhost:3000
 - 素材下载优先使用 GitHub，失败时自动改用 jsDelivr 镜像。
 - `npm run doctor`（即 `node tools/doctor.mjs`）可以随时诊断：Node 版本、素材是否完整、端口占用、局域网地址和防火墙。
 
+### 方式三：安卓 APK（手机独立运行）
+
+仓库可以把服务器、客户端和全部素材一起打包成一个**独立可玩的安卓 APK**（内置 Node.js 运行时，不需要电脑、
+不需要联网）：
+
+```bash
+npm install                  # 依赖
+node tools/fetch-assets.mjs  # 美术 / 音频（约 250 MB，可中断续传）
+node mobile/build-apk.mjs    # → mobile/build/Stronghold-Protocol-0.1.0-android.apk
+```
+
+首次构建会自动准备构建工具（JDK、Android SDK build-tools、NDK、nodejs-mobile，约 1.5 GB，装在仓库外的
+`.toolchain/`），不需要 Gradle 或 Android Studio。装好后手机自己就是服务器，同一 Wi-Fi 的朋友用应用里显示的
+地址或房间链接即可联机。
+
+差异与限制：使用 nodejs-mobile 的 **Node 18.20.4**（官方预编译；桌面版要求 22+，整套测试在 18 上也通过），
+官方 3D 棋盘不可用（贴图需要从本机《明日方舟》客户端提取，自动使用 2D 棋盘），APK 需自签名安装。详见
+**[mobile/README.md](mobile/README.md)**。
+
 ### 系统要求
 
 | 项目 | 要求 |

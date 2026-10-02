@@ -37,3 +37,12 @@ desktop.ini
 .idea/
 .vscode/
 .claude/
+
+# --- Android build (mobile/**; see mobile/README.md) ------------------------------------------------
+# the build cache and the APK itself, the signing key (everyone generates their own), the generated icon copy,
+# and a toolchain placed inside the repository (the default location is <workspace>/.toolchain, outside the repo)
+mobile/build/
+mobile/keystore/
+mobile/icon-512.png
+mobile/.toolchain/
+.toolchain/
