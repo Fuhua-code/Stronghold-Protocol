@@ -98,7 +98,7 @@ npm start          # 启动服务器：http://localhost:3000
 
 ```bash
 npm run apk          # 一键：准备 + 构建 + 签名 + 核验
-                     # → mobile/build/Stronghold-Protocol-0.1.0-android.apk（约 352 MB）
+                     # → mobile/build/Stronghold-Protocol-0.1.0-android.apk（约 440 MB，含手机与模拟器两套运行时）
 
 npm run apk:doctor   # 体检：主机 / 仓库 / 运行时来源 / 工具链 / 已连接手机
 npm run apk:check    # 自检：不构建，只验证这个克隆能不能出包
@@ -106,11 +106,12 @@ npm run apk:verify   # 构建后跑三项验证（服务器自检、APK 解包�
 ```
 
 首次运行会自己准备一切：依赖与素材、Android 工具链（JDK 21 / build-tools 36 / platform android-34，约
-1.5 GB，装在仓库外的 `.toolchain/`）、以及 Termux 仓库的 Node 24.18.0 与其依赖库。不需要 Gradle、Android
-Studio、AndroidX、Kotlin 或 NDK。
+1.5 GB，装在仓库外的 `.toolchain/`）、以及 Termux 仓库的 Node 24.18.0 与其依赖库（arm64 与 x86_64 各一套）。
+不需要 Gradle、Android Studio、AndroidX、Kotlin 或 NDK。
 
-差异与限制：官方 3D 棋盘不可用（贴图需要从本机《明日方舟》客户端提取，自动使用 2D 棋盘），APK 需自签名安装，
-仅支持 arm64-v8a。已在 realme RMX3820 / Android 16 上实测通过（Node 24.18.0 在手机上运行、客户端正常连入）。
+差异与限制：官方 3D 棋盘不可用（贴图需要从本机《明日方舟》客户端提取，自动使用 2D 棋盘），APK 需自签名安装。
+默认同时打 arm64-v8a（手机）与 x86_64（MuMu / 雷电 / 蓝叠等模拟器），只做手机包可用 `--abi=arm64-v8a`
+（约 352 MB）。已在 realme RMX3820（Android 16）与 MuMu Player（x86_64 / Android 12）上实测通过。
 详见 **[mobile/README.md](mobile/README.md)**。
 
 ### 系统要求

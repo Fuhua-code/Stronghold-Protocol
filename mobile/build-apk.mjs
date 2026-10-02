@@ -9,7 +9,9 @@
 //   npm run apk:prepare    (same as --prepare)
 //   npm run apk:check      (same as --check)
 //
-//     --abi=<list>        ABI to package (default arm64-v8a; arm64 is what the Termux packages provide)
+//     --abi=<list>        ABI list to package (default arm64-v8a,x86_64: phones are arm64, the usual Android
+//                         emulators — MuMu, LDPlayer, BlueStacks, the AOSP images — are x86_64, and Android only
+//                         unpacks the `lib/<abi>/` directories that match its own ABI, so both are shipped)
 //     --out=<file>        output APK path (default mobile/build/Stronghold-Protocol-<version>-android.apk)
 //     --with-dev          also package public/dev (the in-browser dev harnesses; not needed to play)
 //     --fetch-assets      download the game art even if it is present, and never ask
@@ -57,6 +59,7 @@ import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { patchRuntimeDir } from './tools/patch-elf-sonames.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..');
@@ -67,18 +70,18 @@ const KEYSTORE = path.join(KEYSTORE_DIR, 'debug.keystore');
 
 const NODEJS_MOBILE = { version: '18.20.4' }; // historical: the previous nodejs-mobile-based build (see mobile/README.md)
 
-/** The Node runtime the APK ships: Termux's Node 24 build for aarch64 (packages.termux.dev, GPL/MIT like upstream). */
+/** The Node runtime the APK ships: Termux's Node 24 build, per architecture (packages.termux.dev). */
 const TERMUX = {
   base: process.env.SP_TERMUX_MIRROR || 'https://packages.termux.dev/apt/termux-main',
-  // package name → [path under pool/, runtime file name in lib/<abi>/, optional rename]
+  // package name → [path under pool/ (with `<arch>` for the architecture), files copied into lib/<abi>/]
   packages: [
-    { pkg: 'nodejs-lts', file: 'pool/main/n/nodejs-lts/nodejs-lts_24.18.0-1_aarch64.deb', bins: { 'bin/node': 'node' } },
-    { pkg: 'libc++', file: 'pool/main/libc/libc++/libc++_30_aarch64.deb', libs: { 'lib/libc++_shared.so': 'libc++_shared.so' } },
-    { pkg: 'openssl', file: 'pool/main/o/openssl/openssl_1%3A3.6.5_aarch64.deb', libs: { 'lib/libcrypto.so.3': 'libcrypto.so.3', 'lib/libssl.so.3': 'libssl.so.3' } },
-    { pkg: 'libicu', file: 'pool/main/libi/libicu/libicu_78.3_aarch64.deb', libs: { 'lib/libicuuc.so.78.3': 'libicuuc.so.78', 'lib/libicui18n.so.78.3': 'libicui18n.so.78', 'lib/libicudata.so.78.3': 'libicudata.so.78' } },
-    { pkg: 'c-ares', file: 'pool/main/c/c-ares/c-ares_1.34.8_aarch64.deb', libs: { 'lib/libcares.so': 'libcares.so' } },
-    { pkg: 'libsqlite', file: 'pool/main/libs/libsqlite/libsqlite_3.53.4_aarch64.deb', libs: { 'lib/libsqlite3.so.3.53.4': 'libsqlite3.so' } },
-    { pkg: 'zlib', file: 'pool/main/z/zlib/zlib_1.3.2_aarch64.deb', libs: { 'lib/libz.so.1.3.2': 'libz.so.1' } },
+    { pkg: 'nodejs-lts', file: 'pool/main/n/nodejs-lts/nodejs-lts_24.18.0-1_<arch>.deb', bins: { 'bin/node': 'node' } },
+    { pkg: 'libc++', file: 'pool/main/libc/libc++/libc++_30_<arch>.deb', libs: { 'lib/libc++_shared.so': 'libc++_shared.so' } },
+    { pkg: 'openssl', file: 'pool/main/o/openssl/openssl_1%3A3.6.5_<arch>.deb', libs: { 'lib/libcrypto.so.3': 'libcrypto.so.3', 'lib/libssl.so.3': 'libssl.so.3' } },
+    { pkg: 'libicu', file: 'pool/main/libi/libicu/libicu_78.3_<arch>.deb', libs: { 'lib/libicuuc.so.78.3': 'libicuuc.so.78', 'lib/libicui18n.so.78.3': 'libicui18n.so.78', 'lib/libicudata.so.78.3': 'libicudata.so.78' } },
+    { pkg: 'c-ares', file: 'pool/main/c/c-ares/c-ares_1.34.8_<arch>.deb', libs: { 'lib/libcares.so': 'libcares.so' } },
+    { pkg: 'libsqlite', file: 'pool/main/libs/libsqlite/libsqlite_3.53.4_<arch>.deb', libs: { 'lib/libsqlite3.so.3.53.4': 'libsqlite3.so' } },
+    { pkg: 'zlib', file: 'pool/main/z/zlib/zlib_1.3.2_<arch>.deb', libs: { 'lib/libz.so.1.3.2': 'libz.so.1' } },
   ],
 };
 
@@ -93,9 +96,25 @@ const TOOLS = {
   targetSdk: process.env.SP_TARGET_SDK || '34',
 };
 
-/** ABI → the Termux architecture the packages above are built for. */
-const ABI_ALIASES = { 'arm64-v8a': 'arm64-v8a', arm64: 'arm64-v8a', aarch64: 'arm64-v8a' };
-const ABI_TERMUX = { 'arm64-v8a': 'aarch64' };
+/**
+ * Android ABI → the architecture name the Termux packages use. Phones are `aarch64`; every mainstream Android
+ * emulator (MuMu, LDPlayer, BlueStacks, the Google AOSP/Play images on a PC) is `x86_64`, and Termux publishes
+ * both — so both fit in one APK and Android unpacks the one that matches the device.
+ */
+const ABI_ALIASES = {
+  'arm64-v8a': 'arm64-v8a', arm64: 'arm64-v8a', aarch64: 'arm64-v8a',
+  x86_64: 'x86_64', x64: 'x86_64', amd64: 'x86_64',
+};
+const ABI_TERMUX = { 'arm64-v8a': 'aarch64', x86_64: 'x86_64' };
+/** Default: phones and emulators both work out of the box. */
+const DEFAULT_ABIS = ['arm64-v8a', 'x86_64'];
+
+/**
+ * The shared libraries the runtime needs, under the names they get **after** `patch-elf-sonames.mjs` has made them
+ * Android-legal (see `stageRuntime`). Android only extracts `lib*.so` shaped entries, so the versioned Termux
+ * sonames (`libcrypto.so.3`, `libicuuc.so.78`, …) are shortened and the ELF records are rewritten to match.
+ */
+const RUNTIME_LIBS = ['libc++_shared.so', 'libcares.so', 'libsqlite3.so', 'libcrypto.so', 'libssl.so', 'libicuuc.so', 'libicui18n.so', 'libicudata.so', 'libz.so'];
 
 const APP = {
   package: 'io.prts.stronghold',
@@ -427,23 +446,23 @@ async function unpackDeb(deb, destDir) {
  */
 async function fetchTermuxNode(toolchain, abi, allowDownload) {
   const arch = ABI_TERMUX[abi];
-  if (!arch) fail(`unsupported ABI ${abi}: the Termux packages are aarch64 only`);
+  if (!arch) fail(`unsupported ABI ${abi}: Termux publishes aarch64 and x86_64 only (use --abi=arm64-v8a or --abi=x86_64)`);
   const destDir = path.join(BUILD, 'runtime', abi);
   const stamp = path.join(destDir, 'RUNTIME.json');
   if (exists(stamp) && exists(path.join(destDir, 'node'))) {
     const info = JSON.parse(await fsp.readFile(stamp, 'utf8'));
-    ok(`runtime cached: Node ${info.node} (${info.packages.length} packages)`);
+    ok(`${abi}: runtime cached — Node ${info.node} (${info.packages.length} packages)`);
     return { bin: path.join(destDir, 'node'), libs: info.libs, node: info.node };
   }
   await fsp.rm(destDir, { recursive: true, force: true });
   await fsp.mkdir(destDir, { recursive: true });
-  const work = path.join(BUILD, 'termux');
+  const work = path.join(BUILD, 'termux', arch);
   await fsp.mkdir(work, { recursive: true });
 
   const libs = [];
   let nodeVersion = null;
   for (const p of TERMUX.packages) {
-    const file = p.file.replace('aarch64', arch);
+    const file = p.file.replace('<arch>', arch);
     const deb = path.join(work, `${p.pkg}.deb`);
     if (!exists(deb)) {
       if (!allowDownload) fail(`missing ${deb} and downloads are disabled`);
@@ -457,15 +476,15 @@ async function fetchTermuxNode(toolchain, abi, allowDownload) {
     const usr = path.join(out, 'data', 'data', 'com.termux', 'files', 'usr');
     const wanted = { ...(p.bins || {}), ...(p.libs || {}) };
     const missing = Object.keys(wanted).filter((rel) => !exists(path.join(usr, ...rel.split('/'))));
-    if (missing.length) fail(`${p.pkg}: ${missing.join(', ')} not found in the package (${members.length} files unpacked)`);
+    if (missing.length) fail(`${p.pkg} (${arch}): ${missing.join(', ')} not found in the package (${members.length} files unpacked)`);
     for (const [from, to] of Object.entries(wanted)) {
       await fsp.copyFile(path.join(usr, ...from.split('/')), path.join(destDir, to));
       if (p.libs) libs.push(to);
     }
     if (p.bins) nodeVersion = /nodejs-lts_(\d+\.\d+\.\d+)/.exec(p.file)?.[1] || '24.x';
   }
-  await fsp.writeFile(stamp, JSON.stringify({ node: nodeVersion, packages: TERMUX.packages.map((p) => p.pkg), libs, fetchedAt: new Date().toISOString() }, null, 1) + '\n');
-  ok(`runtime ready: Node ${nodeVersion} + ${libs.length} shared libraries (${bytes((await dirSize(destDir)).bytes)})`);
+  await fsp.writeFile(stamp, JSON.stringify({ abi, arch, node: nodeVersion, packages: TERMUX.packages.map((p) => p.pkg), libs, fetchedAt: new Date().toISOString() }, null, 1) + '\n');
+  ok(`${abi}: Node ${nodeVersion} + ${libs.length} shared libraries (${bytes((await dirSize(destDir)).bytes)})`);
   return { bin: path.join(destDir, 'node'), libs, node: nodeVersion };
 }
 
@@ -473,7 +492,7 @@ async function fetchTermuxNode(toolchain, abi, allowDownload) {
 // nodejs-project (what the APK ships as assets/nodejs-project)
 // ---------------------------------------------------------------------------------------------------
 
-async function prepareNodejsProject({ withDev }) {
+async function prepareNodejsProject({ withDev, abis = [] }) {
   const dest = path.join(BUILD, 'nodejs-project');
   await fsp.rm(dest, { recursive: true, force: true });
   await fsp.mkdir(dest, { recursive: true });
@@ -535,7 +554,7 @@ async function prepareNodejsProject({ withDev }) {
     version: pkg.version,
     builtAt: new Date().toISOString(),
     builtBy: `node ${process.versions.node}`,
-    runtime: 'Termux nodejs-lts (Node 24) for aarch64, started through /system/bin/linker64',
+    runtime: `Termux nodejs-lts (Node 24) for ${abis.join(' + ') || 'no ABI'}, started through /system/bin/linker64`,
     withDev,
     sourceCommit: run('git', ['-C', REPO, 'rev-parse', 'HEAD'], { capture: true, allowFail: true }).out.trim() || null,
   }, null, 2) + '\n');
@@ -651,15 +670,23 @@ async function writeAndroidProject({ abis, versionName, packageName }) {
 
 /**
  * Native libraries in `jniLibs/<abi>/`; Android extracts these into the app's `nativeLibraryDir`, which is the one
- * directory where the app may execute a program (`node`) and where the dynamic linker finds its dependencies
- * without a W^X violation.
+ * directory where the app may execute a program and where the dynamic linker finds its dependencies without a
+ * W^X violation.
+ *
+ * Android only extracts entries whose name has the `lib*.so` shape, and Termux's runtime uses names that do not
+ * (`node`, `libcrypto.so.3`, `libicu*.so.78`, `libz.so.1` — verified: on MuMu only three of ten files were
+ * extracted). The runtime is therefore copied under Android-legal names and the ELF records that reference them
+ * are rewritten in place (`tools/patch-elf-sonames.mjs`), which is why `node` ships as `libnode.so`.
  */
 async function stageRuntime({ runtime, abi, jniLibs }) {
   const dir = path.join(jniLibs, abi);
   await fsp.mkdir(dir, { recursive: true });
   await fsp.copyFile(runtime.bin, path.join(dir, 'node'));
   for (const lib of runtime.libs) await fsp.copyFile(path.join(path.dirname(runtime.bin), lib), path.join(dir, lib));
-  ok(`runtime staged in jniLibs/${abi}: node + ${runtime.libs.length} libraries (${bytes((await dirSize(dir)).bytes)})`);
+  const patched = await patchRuntimeDir(dir);
+  if (!patched.patched && !patched.renamed.length) warn(`${abi}: nothing needed patching (unexpected)`);
+  const files = (await fsp.readdir(dir)).sort();
+  ok(`runtime staged in lib/${abi}/: ${files.length} entries, ${patched.patched} ELF patched (${bytes((await dirSize(dir)).bytes)})`);
   return dir;
 }
 
@@ -911,10 +938,9 @@ async function verifyApk(apk, { apksigner, aapt2, abis, expectedArt, expectNode 
       if (typeof rel === 'string') need.push(`assets/nodejs-project/node_modules/ws/${rel.replace(/^\.\//, '')}`);
     }
     for (const abi of abis) {
-      need.push(`lib/${abi}/node`);
-      for (const lib of ['libc++_shared.so', 'libcrypto.so.3', 'libssl.so.3', 'libicuuc.so.78', 'libicui18n.so.78', 'libicudata.so.78', 'libcares.so', 'libsqlite3.so', 'libz.so.1']) {
-        need.push(`lib/${abi}/${lib}`);
-      }
+      // every runtime file must have the Android-legal `lib*.so` shape, or it is never extracted (see stageRuntime)
+      need.push(`lib/${abi}/libnode.so`);
+      for (const lib of RUNTIME_LIBS) need.push(`lib/${abi}/${lib}`);
     }
   }
   need.push('res/mipmap-mdpi-v4/ic_launcher.png', 'res/mipmap-xxxhdpi-v4/ic_launcher.png');
@@ -948,9 +974,10 @@ async function verifyApk(apk, { apksigner, aapt2, abis, expectedArt, expectNode 
 
 function parseArgs(argv) {
   const o = {
-    // arm64 only: that is what the Termux Node packages are built for, and it covers every Android device of the
-    // last decade (including this project's own test phone).
-    abis: ['arm64-v8a'],
+    // Phones are arm64, the usual Android emulators (MuMu, LDPlayer, BlueStacks, AOSP/Play images) are x86_64;
+    // Android only unpacks the `lib/<abi>/` directories that match the device, so shipping both works everywhere
+    // and costs ~60 MB. Narrow it with `--abi=arm64-v8a` for a phone-only build.
+    abis: [...DEFAULT_ABIS],
     out: null, withDev: false, node: true, dex: true, download: true, toolchain: null, json: null, help: false,
     mode: 'build',            // 'build' | 'prepare' | 'check'
     fetchAssets: 'ask',       // 'ask' | 'always' | 'never'
@@ -977,7 +1004,7 @@ function parseArgs(argv) {
     else if (key === '--help' || key === '-h') o.help = true;
     else throw new Error(`unknown option ${a} (try --help)`);
   }
-  if (!o.abis.length) o.abis = ['arm64-v8a'];
+  if (!o.abis.length) o.abis = [...DEFAULT_ABIS];
   if (!o.node) o.abis = [];
   if (o.mode === 'check') o.fetchAssets = 'never';
   return o;
@@ -1102,10 +1129,11 @@ async function selfCheck(o) {
     const node = TERMUX.packages.find((p) => p.bins);
     need(!!node, 'no Node package configured');
     const libs = TERMUX.packages.flatMap((p) => Object.values(p.libs || {}));
-    for (const need_ of ['libc++_shared.so', 'libcrypto.so.3', 'libssl.so.3', 'libicudata.so.78', 'libcares.so', 'libsqlite3.so', 'libz.so.1']) {
-      need(libs.includes(need_), `runtime library ${need_} is not configured`);
+    for (const want of ['libc++_shared.so', 'libcrypto.so.3', 'libssl.so.3', 'libicudata.so.78', 'libcares.so', 'libsqlite3.so', 'libz.so.1']) {
+      need(libs.includes(want), `runtime library ${want} is not configured`);
     }
-    return `${node.pkg} + ${libs.length} libraries from ${TERMUX.base.replace(/^https?:\/\//, '')}`;
+    for (const abi of DEFAULT_ABIS) need(!!ABI_TERMUX[abi], `no Termux architecture for ${abi}`);
+    return `${node.pkg} + ${libs.length} libraries for ${DEFAULT_ABIS.join(' + ')} from ${TERMUX.base.replace(/^https?:\/\//, '')}`;
   });
   check('Android SDK toolchain', () => {
     if (!o.download) return 'skipped (--no-download)';
@@ -1186,29 +1214,35 @@ async function main() {
   const javaBin = (n) => path.join(javaHome, 'bin', process.platform === 'win32' ? `${n}.exe` : n);
   ok(`aapt2 ${TOOLS.buildTools}, ${TOOLS.platform}, javac at ${javaHome}`);
 
-  // 2. the Node runtime (Termux Node 24 + its shared libraries)
-  let runtime = null;
+  // 2. the Node runtime (Termux Node 24 + its shared libraries), one per packaged ABI
+  const runtimes = new Map();
   if (o.node) {
-    step('2', 'fetching the Node runtime (Termux nodejs-lts)');
-    runtime = await fetchTermuxNode(toolchain, o.abis[0], o.download);
-    if (o.abis.length > 1) warn(`only ${o.abis[0]} is packaged (the Termux packages are aarch64 only)`);
+    step('2', `fetching the Node runtime for ${o.abis.join(', ')} (Termux nodejs-lts)`);
+    for (const abi of o.abis) runtimes.set(abi, await fetchTermuxNode(toolchain, abi, o.download));
   }
 
   // 3. the assets tree
   step('3', 'assembling assets/nodejs-project');
-  const prepared = await prepareNodejsProject({ withDev: o.withDev });
+  const prepared = await prepareNodejsProject({ withDev: o.withDev, abis: o.abis });
   const artUrls = await assertArtComplete(prepared.dir);
 
   if (o.mode === 'prepare') {
     const size = await dirSize(prepared.dir);
-    const rt = runtime ? (await dirSize(path.join(BUILD, 'runtime', o.abis[0]))) : { bytes: 0, files: 0 };
+    let rtFiles = 0;
+    let rtBytes = 0;
+    for (const abi of o.abis) {
+      const d = await dirSize(path.join(BUILD, 'runtime', abi));
+      rtFiles += d.files;
+      rtBytes += d.bytes;
+    }
+    const nodeVersions = [...new Set([...runtimes.values()].map((r) => r.node))];
     log(`\n\x1b[32m\x1b[1m✔ preparation complete\x1b[0m`);
     log(`  toolchain   ${toolchain}`);
-    log(`  runtime     Node ${runtime ? runtime.node : '(skipped)'} · ${rt.files} files · ${bytes(rt.bytes)}`);
+    log(`  runtime     Node ${nodeVersions.join(' / ') || '(skipped)'} · ${rtFiles} files · ${bytes(rtBytes)}  (${o.abis.join(', ')})`);
     log(`  packaged    ${size.files} files · ${bytes(size.bytes)} (assets/nodejs-project)`);
     log(`  next        node mobile/build-apk.mjs          build the APK`);
     log(`              node mobile/build-apk.mjs --check  verify without building\n`);
-    if (o.json) await fsp.writeFile(path.resolve(o.json), JSON.stringify({ ...report, prepared: { files: size.files, bytes: size.bytes }, runtime: runtime ? runtime.node : null }, null, 1));
+    if (o.json) await fsp.writeFile(path.resolve(o.json), JSON.stringify({ ...report, prepared: { files: size.files, bytes: size.bytes }, runtime: nodeVersions }, null, 1));
     return 0;
   }
 
@@ -1284,8 +1318,8 @@ async function main() {
   // 7. the runtime in jniLibs (Android extracts `lib/**` into the app's executable native library directory)
   const jniLibs = path.join(gen, 'jniLibs');
   if (o.node) {
-    step('7', `staging the Node runtime in lib/${o.abis[0]}/`);
-    for (const abi of o.abis) await stageRuntime({ runtime, abi, jniLibs });
+    step('7', `staging the Node runtime in ${o.abis.map((a) => `lib/${a}/`).join(', ')}`);
+    for (const abi of o.abis) await stageRuntime({ runtime: runtimes.get(abi), abi, jniLibs });
   }
 
   // 8. package the APK: aapt2's manifest/resources/icons + classes.dex + lib/** + assets/nodejs-project/**

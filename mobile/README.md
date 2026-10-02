@@ -59,20 +59,24 @@ npm run apk
    │                     全部下载到 <工作区>/.toolchain/，不写进仓库
    │
    ├─ 2. Node 运行时      Termux 仓库的 nodejs-lts（Node 24.18.0）+ libc++、openssl、c-ares、libicu、
-   │                     libsqlite、zlib；.deb 由脚本自己解析（ar 容器 + xz 载荷）
+   │                     libsqlite、zlib —— **按 ABI 各来一套**（aarch64 与 x86_64）；.deb 由脚本自己
+   │                     解析（ar 容器 + xz 载荷）
    │
    ├─ 3. 待打包目录       mobile/build/nodejs-project/ = server/ + shared/ + data/ + docs/research/
    │                     + mobile/node/main.js + node_modules/ws + public/（客户端与全部素材）
    │
    ├─ 4. 编译             aapt2 compile/link（清单 + 图标 + 主题）· javac · d8（MainActivity → classes.dex）
    │
-   ├─ 5. 打包             自写 ZIP 打包器：aapt2 的产物 + classes.dex + lib/arm64-v8a/** + assets/**
-   │                     全部未压缩存储，lib/**.so 与可执行文件 4 字节对齐
+   ├─ 5. 运行时改名       node → libnode.so，libcrypto.so.3 → libcrypto.so …（Android 只解压 lib*.so 形状），
+   │                     并就地改写 ELF 的 DT_NEEDED / DT_SONAME（tools/patch-elf-sonames.mjs）
    │
-   ├─ 6. 签名             zipalign → apksigner（v2+v3，密钥 mobile/keystore/debug.keystore，首次自动生成）
+   ├─ 6. 打包             自写 ZIP 打包器：aapt2 的产物 + classes.dex + lib/<abi>/** + assets/**
+   │                     全部未压缩存储，lib/**.so 4 字节对齐
    │
-   └─ 7. 核验             apksigner verify · aapt2 dump badging/xmltree · 清单里每个 @type/name 都在资源表内
-                          · 资源表引用的 res/** 都真的在 APK 里 · 素材齐全 · lib/** 未压缩且对齐
+   ├─ 7. 签名             zipalign → apksigner（v2+v3，密钥 mobile/keystore/debug.keystore，首次自动生成）
+   │
+   └─ 8. 核验             apksigner verify · aapt2 dump badging/xmltree · 清单里每个 @type/name 都在资源表内
+                          · 资源表引用的 res/** 都真的在 APK 里 · 每个 ABI 都带齐 node+9 个库 · 素材齐全
 ```
 
 **手机上运行时**：`MainActivity` 首次启动把 `assets/nodejs-project` 解压到应用私有目录（实测约 3 秒），然后
@@ -127,8 +131,20 @@ assets/nodejs-project/
 | 4. 联机 | 同盟模拟 → 创建房间 → 把「同盟密钥」或「复制链接」发给朋友；朋友在同一 Wi-Fi 下打开应用或任意浏览器即可。日志与应用界面里都有手机自己的局域网地址。 |
 | 5. 横屏 | 游戏需要横屏；应用已锁定横屏。 |
 
-**系统要求**：Android 7.0（API 24）或更高、**arm64-v8a**（Termux 只提供 aarch64 的 Node 包）、系统 WebView 可
-更新。手机上需要约 **650 MB** 空闲空间（安装包 + 首次解压）。
+**系统要求**：Android 7.0（API 24）或更高、**arm64-v8a（手机）或 x86_64（模拟器）**、系统 WebView 可更新。
+手机上需要约 **750 MB** 空闲空间（安装包 440 MB + 首次解压 262 MB）；只做手机包可用 `--abi=arm64-v8a`，
+安装包约 352 MB。
+
+**在安卓模拟器上跑**（MuMu / LDPlayer / BlueStacks / Google AOSP 镜像都是 x86_64）：
+
+```bash
+npm run apk                                # 默认同时打 arm64-v8a 与 x86_64
+adb connect 127.0.0.1:5555                 # MuMu 的调试端口（模拟器界面里可查；蓝叠/雷电常用 5555 / 7555）
+adb -s 127.0.0.1:5555 install -r mobile/build/Stronghold-Protocol-0.1.0-android.apk
+```
+
+同一个 APK 带两套运行时，Android 只解压与自己 ABI 相符的那一套，手机与模拟器通吃（代价是体积 +88 MB）。
+模拟器内存建议 4 GB 以上（战斗在 WebView 里模拟）。
 
 **与桌面版的差异**
 
@@ -153,6 +169,7 @@ mobile/                        ← 打包器（本分支新增，其他文件与
 │  └─ res/mipmap-*/ic_launcher.png                图标（tools/make-icons.mjs 生成）
 ├─ tools/
 │  ├─ doctor.mjs               体检（npm run apk:doctor）
+│  ├─ patch-elf-sonames.mjs    把 Termux 运行时改成 Android 合法的 lib*.so 命名并改写 ELF 的 NEEDED/SONAME
 │  ├─ check-server.mjs         在本机以移动端入口启动服务器并逐项自检
 │  ├─ check-apk.mjs            直接读 APK：逐条 CRC 校验、解包、用本机 Node 跑起来再测一遍
 │  ├─ check-client.mjs         无头 Chrome/Edge 打开真实客户端，点到「开始模拟 → 准备就绪 → 休整期」
@@ -195,6 +212,27 @@ WebView loading http://127.0.0.1:37305/
 **尚未覆盖**（需要人工操作）：完整打完一局、音频输出、表情、两人联机与断线重连、长时间后台。建议按第四节
 实际操作确认。
 
+### 模拟器（MuMu Player · x86_64 · Android 12 / API 32）
+
+同一份 APK 在 MuMu 上：
+
+```
+adb connect 127.0.0.1:5555
+adb -s 127.0.0.1:5555 install -r mobile/build/Stronghold-Protocol-0.1.0-android.apk    # Success
+# 解压出的运行时（MuMu 只解压与自己 ABI 相符的一套）
+lib/x86_64/: libnode.so libc++_shared.so libcrypto.so libssl.so libicuuc.so libicui18n.so
+             libicudata.so libcares.so libsqlite3.so libz.so
+```
+
+启动后标题页正常显示并显示「已连接服务器」，与手机同样可玩。
+
+**模拟器上曾经踩到的坑（已修）**：MuMu 是 x86_64，早先的 APK 只有 arm64-v8a，于是
+`nativeLibraryDir` 里**一个运行时文件都没有**（应用报「Node 运行时缺失」）。更深一层的原因是 **Android 只解压
+`lib*.so` 形状的条目**：可执行文件 `node`、以及 `libcrypto.so.3` / `libicu*.so.78` / `libz.so.1` 这类带版本后缀的
+名字会被直接跳过（实测 10 个文件只落地 3 个）。打包器现在把运行时改名成 Android 合法的形状
+（`node` → `libnode.so` 等）并就地改写 ELF 的 `DT_NEEDED` / `DT_SONAME`
+（`tools/patch-elf-sonames.mjs`），10 个文件全部落地、可执行。
+
 ---
 
 ## 七、排错
@@ -205,9 +243,9 @@ WebView loading http://127.0.0.1:37305/
 | 报 `xz is not available` | 解包 Termux 包需要 `xz`；Windows 10+ 自带 `tar`，`xz` 可用 `winget install xz` / `scoop install xz` 安装。 |
 | 报 `no JDK 17+ found` 且无法下载 | 用 `--toolchain=<目录>` 指向已有 JDK/SDK，或设置 `JAVA_HOME`。 |
 | 安装时报「签名不一致」 | 之前装过别的密钥签名的版本：`adb uninstall io.prts.stronghold` 后重装。 |
-| 卡在「正在解压美术与音频…」 | 正常，约 4000 个文件 / 262 MB；确认手机剩余空间 ≥ 650 MB。 |
+| 卡在「正在解压美术与音频…」 | 正常，约 4000 个文件 / 262 MB；确认手机剩余空间 ≥ 750 MB（手机包）/ 440 MB（安装包本身）。 |
 | 卡在「正在启动本机服务器…」后显示错误页 | `adb logcat -s StrongholdProtocol` 看 Node 报错；多为素材解压不完整 →「设置 → 应用 → 清除数据」后重开。 |
-| 「Node 运行时缺失」 | APK 是用 `--no-node` 构建的客户端壳，需要用默认参数重新构建。 |
+| 「Node 运行时缺失」 | ① APK 用 `--no-node` 构建的客户端壳 → 用默认参数重建；② 设备 ABI 不在包里（错误信息会列出包内 ABI 与本机 ABI）→ 加 `--abi=` 重建。模拟器请用默认双 ABI 构建。 |
 | 朋友连不上 | 确认在同一 Wi-Fi；访客网络常开「AP 隔离」会禁止设备互访；把日志里的局域网地址或房间链接发给对方即可。 |
 | 画面卡顿 | 游戏内「设置」降画质；低端机可用 `?render=fallback`。 |
 

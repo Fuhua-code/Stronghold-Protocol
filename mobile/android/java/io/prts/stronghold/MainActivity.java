@@ -4,10 +4,12 @@
 //
 //   1. the APK's `assets/nodejs-project/` (server + shared + data + the client's public/, plus mobile/node/main.js)
 //      is unpacked into the app's private files directory on first start and after every app update;
-//   2. the **Node runtime itself lives in `lib/arm64-v8a/`**, which Android extracts into the app's native library
+//   2. the **Node runtime itself lives in `lib/<abi>/`**, which Android extracts into the app's native library
 //      directory (`ApplicationInfo.nativeLibraryDir`) — the one place an app is allowed to execute a program from
-//      and where the dynamic linker resolves its dependencies without a W^X violation. That runtime is Termux's
-//      Node 24 LTS build (`node` plus libc++, openssl, c-ares, libicu, libsqlite and zlib);
+//      and where the dynamic linker resolves its dependencies without a W^X violation. The APK carries one runtime
+//      per ABI (arm64-v8a for phones, x86_64 for the usual Android emulators) and Android unpacks only the one it
+//      needs; {@link #runtimeDir()} finds it. That runtime is Termux's Node 24 LTS build (`node` plus libc++,
+//      openssl, c-ares, libicu, libsqlite and zlib);
 //   3. Node is started as
 //        node <filesDir>/nodejs-project/mobile/node/main.js
 //             --public <filesDir>/nodejs-project/public --data <filesDir>/nodejs-project/data
@@ -302,9 +304,60 @@ public class MainActivity extends Activity {
         return new File(getFilesDir(), PROJECT);
     }
 
-    /** The Node runtime Android extracted from `lib/arm64-v8a/` — the one place the app may execute from. */
+    /**
+     * The directory that holds the Node runtime: `ApplicationInfo.nativeLibraryDir`, i.e. where Android extracts
+     * the APK's `lib/<abi>/` entries. The APK ships one runtime per ABI — arm64 for phones, x86_64 for the usual
+     * Android emulators (MuMu, LDPlayer, BlueStacks, AOSP/Play images) — and Android unpacks only the ABI the
+     * device needs, while `nativeLibraryDir` names exactly one of them (`lib/arm64` on a phone, `lib/x86_64` on an
+     * x86 emulator). The candidates below cover both spellings plus the device's own ABI list, so the right runtime
+     * is found either way; a device that got none (an emulator whose native bridge cannot run our code) reports a
+     * clear error instead of failing to start.
+     *
+     * The runtime executable is called `libnode.so`, not `node`: Android only extracts `lib*.so` shaped entries
+     * from `lib/` (see the packager's `stageRuntime`), and the executable is renamed together with its libraries'
+     * ELF records.
+     */
+    private static final String RUNTIME_EXECUTABLE = "libnode.so";
+
+    private File runtimeDir() {
+        File primary = new File(getApplicationInfo().nativeLibraryDir);
+        File libRoot = primary.getParentFile();
+        List<File> candidates = new ArrayList<File>();
+        candidates.add(primary);
+        if (libRoot != null) {
+            String name = primary.getName();                                    // "arm64" / "x86_64"
+            candidates.add(new File(libRoot, name + "-v8a"));                   // lib/arm64   -> lib/arm64-v8a
+            candidates.add(new File(libRoot, name.replace('_', '-')));          // lib/x86_64  -> lib/x86-64
+            candidates.add(new File(libRoot, "arm64-v8a"));
+            candidates.add(new File(libRoot, "x86_64"));
+        }
+        for (String abi : Build.SUPPORTED_ABIS) {
+            if (libRoot != null) candidates.add(new File(libRoot, abi));
+        }
+        for (File dir : candidates) {
+            if (dir.isDirectory() && new File(dir, RUNTIME_EXECUTABLE).isFile()) return dir;
+        }
+        Log.w(TAG, "no runtime directory containing " + RUNTIME_EXECUTABLE + "; looked at " + candidates);
+        return primary;
+    }
+
+    /** The Node executable in {@link #runtimeDir()}. */
     private File runtimeNode() {
-        return new File(getApplicationInfo().nativeLibraryDir, "node");
+        return new File(runtimeDir(), RUNTIME_EXECUTABLE);
+    }
+
+    /** The ABIs this APK carries a runtime for (the `lib/` entries), for the error message. */
+    private String runtimeAbis() {
+        File libRoot = new File(getApplicationInfo().nativeLibraryDir).getParentFile();
+        if (libRoot == null) return "?";
+        String[] dirs = libRoot.list();
+        if (dirs == null || dirs.length == 0) return "?";
+        StringBuilder sb = new StringBuilder();
+        for (String d : dirs) {
+            if (sb.length() > 0) sb.append(", ");
+            sb.append(d);
+        }
+        return sb.toString();
     }
 
     private boolean wasApkUpdated() {
@@ -383,7 +436,10 @@ public class MainActivity extends Activity {
         final File node = runtimeNode();
         final File handshakeFile = new File(getFilesDir(), "handshake.json");
         if (!node.isFile()) {
-            showError("Node 运行时缺失", "找不到 " + node.getAbsolutePath() + "（这个 APK 是否用 --no-node 构建？）", "退出", new Runnable() {
+            showError("Node 运行时缺失",
+                    "找不到 " + node.getAbsolutePath() + "。\n这个 APK 是否用 --no-node 构建？或者设备的 CPU 架构不在 APK 内"
+                            + "（APK 支持 " + runtimeAbis() + "，本机是 " + Build.SUPPORTED_ABIS[0] + "）。",
+                    "退出", new Runnable() {
                 @Override
                 public void run() {
                     finish();
@@ -454,9 +510,11 @@ public class MainActivity extends Activity {
         env.put("TMPDIR", getCacheDir().getAbsolutePath());
         env.put("LANG", "zh_CN.UTF-8");
         env.put("NODE_OPTIONS", "--max-old-space-size=2048");
-        // the runtime's libraries live next to the executable in nativeLibraryDir
-        env.put("LD_LIBRARY_PATH", getApplicationInfo().nativeLibraryDir);
-        env.put("PATH", getApplicationInfo().nativeLibraryDir + ":/system/bin:/system/xbin");
+        // the runtime's libraries live next to the executable (libc++, openssl, icu, …); that is the ABI directory
+        // the executable was found in, not necessarily `nativeLibraryDir`
+        String runtimeDir = runtimeDir().getAbsolutePath();
+        env.put("LD_LIBRARY_PATH", runtimeDir);
+        env.put("PATH", runtimeDir + ":/system/bin:/system/xbin");
         Process proc;
         try {
             proc = pb.start();

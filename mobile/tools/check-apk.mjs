@@ -188,14 +188,26 @@ async function main() {
   for (const need of ['classes.dex', 'resources.arsc', 'AndroidManifest.xml']) {
     check(`APK contains ${need}`, byName.has(need));
   }
-  // The runtime lives in lib/<abi>/: the Termux `node` executable plus the shared libraries it links against.
+  // The runtime lives in lib/<abi>/: the Node executable plus the shared libraries it links against, all under
+  // Android-legal `lib*.so` names (Android only extracts those; the packager renames and patches the ELF records,
+  // see tools/patch-elf-sonames.mjs). A name that is not `lib*.so`-shaped would silently not be extracted.
   const libEntries = zip.entries.filter((e) => e.name.startsWith('lib/')).map((e) => e.name).sort();
-  const nodeEntry = libEntries.find((n) => /^lib\/[^/]+\/node$/.test(n));
-  const wantedLibs = ['libc++_shared.so', 'libcrypto.so.3', 'libssl.so.3', 'libicuuc.so.78', 'libicui18n.so.78', 'libicudata.so.78', 'libcares.so', 'libsqlite3.so', 'libz.so.1'];
-  const missingLibs = wantedLibs.filter((l) => !libEntries.some((n) => n.endsWith(`/${l}`)));
-  check('APK contains the Node runtime (Termux node + its libraries)',
-    !!nodeEntry && missingLibs.length === 0,
-    `${libEntries.length} entries in lib/${nodeEntry ? `, executable ${nodeEntry}` : ', NO executable'}${missingLibs.length ? `, missing ${missingLibs.join(', ')}` : ''}`);
+  const abiDirs = [...new Set(libEntries.map((n) => n.split('/')[1]).filter(Boolean))].sort();
+  const RUNTIME_EXECUTABLE = 'libnode.so';
+  const RUNTIME_LIBS = ['libc++_shared.so', 'libcares.so', 'libsqlite3.so', 'libcrypto.so', 'libssl.so',
+    'libicuuc.so', 'libicui18n.so', 'libicudata.so', 'libz.so'];
+  const perAbi = abiDirs.map((abi) => ({
+    abi,
+    exe: libEntries.includes(`lib/${abi}/${RUNTIME_EXECUTABLE}`),
+    missing: RUNTIME_LIBS.filter((l) => !libEntries.includes(`lib/${abi}/${l}`)),
+    illegal: libEntries.filter((n) => n.startsWith(`lib/${abi}/`) && !/^lib[^/]*\.so$/.test(n.split('/')[2])),
+  }));
+  check(`APK carries the Node runtime for ${abiDirs.length} ABI(s): ${abiDirs.join(', ')}`,
+    perAbi.length > 0 && perAbi.every((r) => r.exe && r.missing.length === 0 && r.illegal.length === 0),
+    perAbi.map((r) => `${r.abi}: ${r.exe ? RUNTIME_EXECUTABLE : 'NO executable'}`
+      + `${r.missing.length ? `, missing ${r.missing.join(', ')}` : ''}`
+      + `${r.illegal.length ? `, not extractable ${r.illegal.join(', ')}` : ''}`).join(' | '));
+  report.runtimeAbis = abiDirs;
 
   // ---- unpack assets/nodejs-project (the exact tree the phone copies into filesDir) ------------------------
   const assets = zip.entries.filter((e) => e.name.startsWith('assets/nodejs-project/'));
