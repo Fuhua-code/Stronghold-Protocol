@@ -9,8 +9,8 @@
 //
 //   1. Pick the game's `public/` directory: the first candidate that holds an `index.html` (Android passes the
 //      extracted assets directory; a desktop run of this file falls back to the directory next to it).
-//   2. server/index.js startServer() on an EPHEMERAL port by default (`--port 0`): Android reserves low ports and
-//      anything in use would fail the boot; `0.0.0.0` because LAN co-op is a feature (the phone is the server).
+//   2. server/index.js startServer() on an EPHEMERAL port by default (`--port 0`) to avoid conflicts with other
+//      local services; `0.0.0.0` because LAN co-op is a feature (the phone is the server).
 //   3. Wait until the server really answers (`/healthz` through ordinary HTTP, plus one WebSocket upgrade, which is
 //      what the game itself needs) before writing the handshake file, so the WebView is never pointed at a server
 //      that cannot serve yet.

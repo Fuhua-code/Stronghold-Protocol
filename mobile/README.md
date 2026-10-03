@@ -11,8 +11,8 @@ npm run apk
 （取决于网速）；之后重跑只需十几秒到一分钟。产物：
 
 ```
-mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a.apk     约 352 MB，v2+v3 已签名（默认：手机）
-mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a-x86_64.apk   约 440 MB（npm run apk:all：手机 + 模拟器）
+mobile/build/Stronghold-Protocol-0.1.1-arm64-v8a.apk     约 352 MB，v2+v3 已签名（默认：手机）
+mobile/build/Stronghold-Protocol-0.1.1-arm64-v8a-x86_64.apk   约 440 MB（npm run apk:all：手机 + 模拟器）
 ```
 
 文件名带 ABI，所以两种包可以在同一目录并存、互不覆盖。默认只打 arm64（手机就只需要自己那一套 ABI，Android 也
@@ -35,7 +35,7 @@ mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a-x86_64.apk   约 440 MB（npm r
 | `npm run apk:check` | 自检：**不构建**，只验证「这个克隆能不能出包」（11 项） |
 | `npm run apk:prepare` | 只准备（工具链 + Node 运行时 + 待打包目录），不打 APK |
 | `npm run apk:verify` | 构建后跑三项验证：服务器自检 → APK 解包实跑 → 无头浏览器点到休整期 |
-| `adb install -r mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a.apk` | 装到手机 |
+| `adb install -r mobile/build/Stronghold-Protocol-0.1.1-arm64-v8a.apk` | 装到手机 |
 | `adb logcat -s StrongholdProtocol` | 看应用与 Node 的日志 |
 
 `mobile/build-apk.mjs` 也直接接受参数：
@@ -56,6 +56,18 @@ node mobile/build-apk.mjs --no-node               # 只做客户端壳（需要�
 ---
 
 ## 二、它是怎么工作的
+
+本分支已合并上游 master 0.1.1 和本机连接界面。后续先同步上游并合并 master，再运行
+`npm run apk`（手机）或 `npm run apk:all`（含模拟器），即可打包当前完整版本；无需另复制前端或远程联机代码。
+版本号来自项目 package.json，0.1.1 APK 的 versionCode 为 2，可覆盖此前 versionCode 为 1 的同签名安装。
+
+打包时仅在生成目录调整当前缺失的可选音频引用：优先使用已有的同玩法提示音，否则保留静音回退；
+上游 data/assets.json 不会被改写。图片、字体与其他必需素材缺失仍会阻止构建。
+0.1.1 的 `/media/` 音频路由与共享模块一并打包。
+
+桌面服务默认端口为 3000；APK 明确使用 `--port 0`，由系统选择可用端口，以避免与其他本机服务冲突。
+因此 APK 的局域网地址可能使用不同端口，重新启动后也可能变化。请使用终端的 LAN 输出或大厅“远程指南”
+显示的完整地址；设置内网穿透时，也应映射该次启动的实际端口，不要固定套用桌面的 3000。
 
 ```
 npm run apk
@@ -148,7 +160,7 @@ assets/nodejs-project/
 ```bash
 npm run apk:all                            # 手机 + 模拟器：一个 APK 里带两套运行时
 adb connect 127.0.0.1:5555                 # MuMu 的调试端口（模拟器界面里可查；蓝叠/雷电常用 5555 / 7555）
-adb -s 127.0.0.1:5555 install -r mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a-x86_64.apk
+adb -s 127.0.0.1:5555 install -r mobile/build/Stronghold-Protocol-0.1.1-arm64-v8a-x86_64.apk
 ```
 
 也可以 `npm run apk && node mobile/build-apk.mjs --abi=x86_64` 分别出两个单 ABI 的包（各约 352 MB）。
@@ -195,7 +207,7 @@ mobile/                        ← 打包器（本分支新增，其他文件与
 在 **realme RMX3820 · Android 16（API 36）· arm64-v8a** 上实测：
 
 ```
-adb install -r mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a.apk    # Success
+adb install -r mobile/build/Stronghold-Protocol-0.1.1-arm64-v8a.apk    # Success
 adb shell am start -n io.prts.stronghold/.MainActivity
 
 copy: apkChanged=true needCode=true needArt=true
@@ -226,7 +238,7 @@ WebView loading http://127.0.0.1:37305/
 
 ```
 adb connect 127.0.0.1:5555
-adb -s 127.0.0.1:5555 install -r mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a-x86_64.apk    # Success
+adb -s 127.0.0.1:5555 install -r mobile/build/Stronghold-Protocol-0.1.1-arm64-v8a-x86_64.apk    # Success
 # 解压出的运行时（MuMu 只解压与自己 ABI 相符的一套）
 lib/x86_64/: libnode.so libc++_shared.so libcrypto.so libssl.so libicuuc.so libicui18n.so
              libicudata.so libcares.so libsqlite3.so libz.so

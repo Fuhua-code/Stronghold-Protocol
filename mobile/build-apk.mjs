@@ -66,6 +66,7 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { patchRuntimeDir } from './tools/patch-elf-sonames.mjs';
+import { prepareAudioManifest } from './tools/prepare-audio-manifest.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..');
@@ -128,7 +129,7 @@ const APP = {
   package: 'io.prts.stronghold',
   label: '卫戍协议：盟约',
   versionName: null, // from package.json
-  versionCode: 1,
+  versionCode: 2, // 0.1.1 updates the previously shipped versionCode 1 APKs.
 };
 
 // ---------------------------------------------------------------------------------------------------
@@ -527,6 +528,12 @@ async function prepareNodejsProject({ withDev, abis = [] }) {
   // 2b. the marker the app compares before re-unpacking 290 MB of art after an update (MainActivity's needArt):
   //     any change to the shipped client or art changes this value, so the phone re-extracts exactly once.
   const pkgVersion = JSON.parse(await fsp.readFile(path.join(REPO, 'package.json'), 'utf8')).version;
+  const manifestFile = path.join(dest, 'data', 'assets.json');
+  const audio = prepareAudioManifest(JSON.parse(await fsp.readFile(manifestFile, 'utf8')), pubDst);
+  if (audio.changes.length) {
+    await fsp.writeFile(manifestFile, JSON.stringify(audio.manifest) + '\n');
+    warn(`${audio.changes.length} unavailable optional audio references adjusted in the APK copy; source manifest unchanged`);
+  }
   const artHash = await hashTree(pubDst);
   await fsp.writeFile(path.join(pubDst, 'ASSETS-VERSION'), `${pkgVersion}-${artHash}\n`);
 
@@ -569,7 +576,7 @@ async function prepareNodejsProject({ withDev, abis = [] }) {
 
   const size = await dirSize(dest);
   ok(`nodejs-project prepared: ${size.files} files, ${bytes(size.bytes)}`);
-  return { dir: dest, size };
+  return { dir: dest, size, audioAdjustments: audio.changes };
 }
 
 /** Every `/assets/…` or `/fonts/…` URL of data/assets.json (tools/setup.mjs checkAssets does the same walk). */
@@ -583,7 +590,7 @@ function manifestUrls(node, out = []) {
 /** Refuse to build an APK whose art is incomplete: the client would silently fall back to placeholders. */
 async function assertArtComplete(nodeProjectDir) {
   const pub = path.join(nodeProjectDir, 'public');
-  const manifest = JSON.parse(await fsp.readFile(path.join(REPO, 'data', 'assets.json'), 'utf8'));
+  const manifest = JSON.parse(await fsp.readFile(path.join(nodeProjectDir, 'data', 'assets.json'), 'utf8'));
   const urls = [...new Set(manifestUrls(manifest))];
   const missing = [];
   for (const u of urls) {
@@ -1119,7 +1126,8 @@ async function selfCheck(o) {
     return `ws v${pkg.version} with its export map intact`;
   });
   check('game art complete (data/assets.json)', () => {
-    const manifest = readJson(path.join(REPO, 'data', 'assets.json'));
+    const audio = prepareAudioManifest(readJson(path.join(REPO, 'data', 'assets.json')), path.join(REPO, 'public'));
+    const manifest = audio.manifest;
     const urls = [...new Set(manifestUrls(manifest))];
     need(urls.length > 0, 'data/assets.json lists no art');
     const missing = urls.filter((u) => {
@@ -1127,7 +1135,7 @@ async function selfCheck(o) {
       try { return !fs.statSync(p).size; } catch { return true; }
     });
     need(missing.length === 0, `${missing.length}/${urls.length} art files missing — run node tools/fetch-assets.mjs (e.g. ${missing.slice(0, 3).join(', ')})`);
-    return `${urls.length} files`;
+    return `${urls.length} files; ${audio.changes.length} optional audio adjustments in the APK copy`;
   });
   check('Android resources and activity', () => {
     for (const rel of ['android/java/io/prts/stronghold/MainActivity.java', 'android/res/mipmap-mdpi/ic_launcher.png', 'android/res/mipmap-xxxhdpi/ic_launcher.png', 'tools/make-icons.mjs', 'node/main.js']) {
@@ -1234,6 +1242,7 @@ async function main() {
   // 3. the assets tree
   step('3', 'assembling assets/nodejs-project');
   const prepared = await prepareNodejsProject({ withDev: o.withDev, abis: o.abis });
+  record('audio-manifest', { adjustments: prepared.audioAdjustments });
   const artUrls = await assertArtComplete(prepared.dir);
 
   if (o.mode === 'prepare') {

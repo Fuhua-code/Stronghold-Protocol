@@ -44,6 +44,12 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.webkit.WebChromeClient;
+import android.webkit.CookieManager;
+import android.webkit.SslErrorHandler;
+import android.webkit.WebResourceError;
+import android.webkit.WebResourceRequest;
+import android.net.http.SslError;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -65,6 +71,8 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.net.URI;
+import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -89,11 +97,19 @@ public class MainActivity extends Activity {
     private final Handler ui = new Handler(Looper.getMainLooper());
     private FrameLayout root;
     private WebView web;
+    private WebView remoteWeb;
     private LinearLayout overlay;
     private TextView status;
     private TextView detail;
     private Button actionButton;
     private JSONObject handshake;
+    private volatile Process nodeProcess;
+    private volatile boolean serverStopped;
+    private volatile boolean remotePreview;
+    private int remoteGeneration;
+    private long remotePageStarted;
+    private SslErrorHandler pendingCertificate;
+    private int certificateToken;
 
     // -----------------------------------------------------------------------------------------------
     // activity lifecycle
@@ -115,12 +131,14 @@ public class MainActivity extends Activity {
     @Override
     protected void onSaveInstanceState(Bundle out) {
         super.onSaveInstanceState(out);
-        if (web != null && web.getUrl() != null) out.putString("url", web.getUrl());
+        WebView active = remoteWeb != null && remoteWeb.getVisibility() == View.VISIBLE ? remoteWeb : web;
+        if (active != null && active.getUrl() != null) out.putString("url", active.getUrl());
     }
 
     @Override
     protected void onPause() {
         if (web != null) web.onPause();       // keeps the page alive; the renderer process is not destroyed
+        if (remoteWeb != null) remoteWeb.onPause();
         super.onPause();
     }
 
@@ -128,10 +146,16 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         if (web != null) web.onResume();
+        if (remoteWeb != null) remoteWeb.onResume();
     }
 
     @Override
     public void onBackPressed() {
+        if (remotePreview) {
+            if (pendingCertificate == null && remoteWeb.canGoBack()) remoteWeb.goBack();
+            else returnToLocal();
+            return;
+        }
         new AlertDialog.Builder(this)
                 .setTitle("退出游戏？")
                 .setMessage("房间和对局保存在这台手机的服务器上，退出会结束所有对局。\n\n（想让朋友继续玩就选「继续游戏」，把手机留在前台。）")
@@ -183,7 +207,15 @@ public class MainActivity extends Activity {
             }
         });
         web.setHapticFeedbackEnabled(true);
+        web.addJavascriptInterface(new Bridge(), "SP_BRIDGE");
         root.addView(web);
+
+        // Remote games use a separate origin and WebView. Keeping it separate prevents a remote page from
+        // inheriting the local server's storage and makes the local server shutdown explicit after handoff.
+        remoteWeb = new WebView(this);
+        configureRemoteWebView(remoteWeb);
+        remoteWeb.setVisibility(View.GONE);
+        root.addView(remoteWeb);
 
         overlay = new LinearLayout(this);
         overlay.setOrientation(LinearLayout.VERTICAL);
@@ -279,6 +311,199 @@ public class MainActivity extends Activity {
                 Log.i(TAG, "WebView loading " + url);
             }
         });
+    }
+
+    private void configureRemoteWebView(WebView view) {
+        view.setBackgroundColor(BG);
+        view.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        WebSettings s = view.getSettings();
+        s.setJavaScriptEnabled(true);
+        s.setDomStorageEnabled(true);
+        s.setDatabaseEnabled(true);
+        s.setMediaPlaybackRequiresUserGesture(false);
+        s.setAllowFileAccess(false);
+        s.setAllowContentAccess(false);
+        s.setSupportZoom(false);
+        s.setBuiltInZoomControls(false);
+        s.setDisplayZoomControls(false);
+        s.setUseWideViewPort(true);
+        s.setLoadWithOverviewMode(true);
+        s.setCacheMode(WebSettings.LOAD_DEFAULT);
+        s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        // Keep this WebView's actual browser version for verification pages.
+        view.setWebViewClient(new WebViewClient() {
+            @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest request) {
+                if (!request.isForMainFrame()) return false;
+                if (validRemoteAddress(request.getUrl().toString())) return false;
+                reportRemoteFailure("invalid", "不能通过远程模式访问本机或非网络地址。");
+                return true;
+            }
+            @Override public void onPageStarted(WebView v, String url, android.graphics.Bitmap icon) {
+                remoteGeneration++;
+                remotePageStarted = System.currentTimeMillis();
+            }
+            @Override public void onPageFinished(WebView v, String url) {
+                super.onPageFinished(v, url);
+                inspectRemotePage(remoteGeneration);
+            }
+            @Override public void onReceivedError(WebView v, WebResourceRequest request, WebResourceError error) {
+                if (request.isForMainFrame()) reportRemoteFailure("error", error.getDescription().toString());
+            }
+            @Override public void onReceivedSslError(WebView v, SslErrorHandler handler, SslError error) {
+                if (!remotePreview || !validRemoteAddress(error.getUrl())) { handler.cancel(); return; }
+                if (pendingCertificate != null) pendingCertificate.cancel();
+                pendingCertificate = handler;
+                int token = ++certificateToken;
+                remoteWeb.setVisibility(View.GONE);
+                web.setVisibility(View.VISIBLE);
+                JSONObject event = new JSONObject();
+                try { event.put("kind", "certificate"); event.put("url", error.getUrl()); event.put("token", token); }
+                catch (Exception ignored) { handler.cancel(); return; }
+                dispatchRemoteEvent(event);
+            }
+        });
+        view.setWebChromeClient(new WebChromeClient() {
+            @Override public boolean onConsoleMessage(android.webkit.ConsoleMessage m) {
+                Log.i(TAG, "[remote-js] " + m.message() + " (" + m.sourceId() + ":" + m.lineNumber() + ")");
+                return true;
+            }
+        });
+        view.setHapticFeedbackEnabled(true);
+        CookieManager.getInstance().setAcceptCookie(true);
+        CookieManager.getInstance().setAcceptThirdPartyCookies(view, true);
+    }
+
+    private boolean validRemoteAddress(String value) {
+        try {
+            URI address = new URI(value);
+            String scheme = address.getScheme(), host = address.getHost();
+            if (!("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) || host == null || address.getRawUserInfo() != null) return false;
+            if (address.getPort() == 0 || address.getPort() > 65535) return false;
+            String h = host.toLowerCase(java.util.Locale.ROOT).replaceAll("^\\[|\\]$", "");
+            h = h.replaceAll("\\.$", "");
+            if (h.equals("localhost") || h.endsWith(".localhost") || h.equals("0.0.0.0")) return false;
+            if (h.contains(":")) {
+                InetAddress ip = InetAddress.getByName(h);
+                return !ip.isLoopbackAddress() && !ip.isAnyLocalAddress();
+            }
+            if (h.matches("[0-9.]+")) {
+                if (!h.matches("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}")) return false;
+                for (String part : h.split("\\.")) {
+                    if (Integer.parseInt(part) > 255 || (part.length() > 1 && part.startsWith("0"))) return false;
+                }
+                return !h.startsWith("127.");
+            }
+            return h.matches("(?i)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]+)\\.?");
+        } catch (Exception ignored) { return false; }
+    }
+
+    private void openRemotePage(String url) {
+        if (!validRemoteAddress(url) || remoteWeb == null) return;
+        remotePreview = true;
+        remoteGeneration++;
+        remotePageStarted = System.currentTimeMillis();
+        remoteWeb.clearSslPreferences(); // Each new access requires its own user certificate decision.
+        web.setVisibility(View.GONE);
+        overlay.setVisibility(View.GONE);
+        remoteWeb.setVisibility(View.VISIBLE);
+        remoteWeb.loadUrl(url);
+    }
+
+    private void returnToLocal() {
+        remotePreview = false;
+        remoteGeneration++;
+        if (pendingCertificate != null) { pendingCertificate.cancel(); pendingCertificate = null; }
+        remoteWeb.stopLoading();
+        remoteWeb.setVisibility(View.GONE);
+        web.setVisibility(View.VISIBLE);
+    }
+
+    private void dispatchRemoteEvent(JSONObject event) {
+        web.evaluateJavascript("window.dispatchEvent(new CustomEvent('sp-remote-event',{detail:" + event.toString() + "}))", null);
+    }
+
+    private void reportRemoteFailure(String kind, String message) {
+        if (!remotePreview) return;
+        returnToLocal();
+        JSONObject event = new JSONObject();
+        try { event.put("kind", kind); event.put("message", message); } catch (Exception ignored) { return; }
+        dispatchRemoteEvent(event);
+    }
+
+    private void inspectRemotePage(final int generation) {
+        if (!remotePreview || pendingCertificate != null || generation != remoteGeneration) return;
+        final String script = "(function(){var main=Array.from(document.scripts).some(function(s){return /\\/js\\/main\\.js(?:[?#]|$)/.test(s.src)});"
+                + "var title=document.querySelector('.title-screen .title-cn'),lobby=document.querySelector('.lobby-screen');"
+                + "var text=(document.body&&document.body.innerText)||'';"
+                + "var waiting=/captcha|验证|认证|防火墙|checking your browser|access denied|重定向/i.test(text);"
+                + "return JSON.stringify({game:main&&!!(title&&/卫戍协议/.test(title.textContent)||lobby),candidate:main,waiting:waiting,url:location.href});})()";
+        remoteWeb.evaluateJavascript(script, value -> {
+            if (!remotePreview || pendingCertificate != null || generation != remoteGeneration) return;
+            try {
+                JSONObject result = new JSONObject(new JSONArray("[" + value + "]").getString(0));
+                if (!validRemoteAddress(result.optString("url"))) { reportRemoteFailure("invalid", "远程地址无效。"); return; }
+                if (result.optBoolean("game")) {
+                    remotePreview = false;
+                    Log.i(TAG, "remote game main screen confirmed; stopping local server");
+                    stopLocalServer();
+                    return;
+                }
+                long elapsed = System.currentTimeMillis() - remotePageStarted;
+                if (!result.optBoolean("waiting") && elapsed > (result.optBoolean("candidate") ? 30000 : 3500)) {
+                    reportRemoteFailure(result.optBoolean("candidate") ? "error" : "invalid", "远程游戏界面未能加载，请检查网络或页面资源。");
+                    return;
+                }
+            } catch (Exception e) { Log.w(TAG, "remote page inspection pending", e); }
+            ui.postDelayed(() -> inspectRemotePage(generation), 1000);
+        });
+    }
+
+    private final class Bridge {
+        @JavascriptInterface public boolean isApp() { return true; }
+
+        @JavascriptInterface public void openRemote(final String url) {
+            if (!validRemoteAddress(url)) return;
+            ui.post(() -> openRemotePage(url));
+        }
+
+        @JavascriptInterface public boolean openExternal(final String url) {
+            if (!validRemoteAddress(url)) return false;
+            ui.post(() -> openRemotePage(url));
+            return true;
+        }
+        @JavascriptInterface public void answerCertificate(final String token, final boolean accepted) {
+            ui.post(() -> {
+                if (pendingCertificate == null || !String.valueOf(certificateToken).equals(token)) return;
+                SslErrorHandler handler = pendingCertificate;
+                pendingCertificate = null;
+                if (!accepted) { handler.cancel(); returnToLocal(); return; }
+                web.setVisibility(View.GONE);
+                remoteWeb.setVisibility(View.VISIBLE);
+                handler.proceed(); // Only the user's response to this specific certificate prompt permits this.
+            });
+        }
+    }
+
+    private void stopLocalServer() {
+        if (serverStopped) return;
+        serverStopped = true;
+        final Process p = nodeProcess;
+        if (p == null) { sServerStarted = false; return; }
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    p.destroy();
+                    long deadline = System.currentTimeMillis() + 2500;
+                    while (System.currentTimeMillis() < deadline) {
+                        try { p.exitValue(); break; }
+                        catch (IllegalThreadStateException stillRunning) { Thread.sleep(100); }
+                    }
+                    try { p.exitValue(); } catch (IllegalThreadStateException stillRunning) { p.destroy(); }
+                } catch (Exception e) { Log.w(TAG, "stopping local Node failed", e); }
+                nodeProcess = null;
+                sServerStarted = false;
+            }
+        }, "sp-node-stop").start();
     }
 
     // -----------------------------------------------------------------------------------------------
@@ -475,7 +700,7 @@ public class MainActivity extends Activity {
                     setStatus("正在启动本机服务器…", "通过系统动态链接器启动 Node");
                     exit = runNode(nodeArgs, true);
                 }
-                if (exit == null || exit.intValue() != 0) {
+                if (!serverStopped && (exit == null || exit.intValue() != 0)) {
                     showError("本机服务器已停止", "Node.js 退出码 " + (exit == null ? "?" : exit)
                             + "；请退出后重新打开应用（日志：adb logcat -s StrongholdProtocol）", "退出", new Runnable() {
                         @Override
@@ -522,6 +747,7 @@ public class MainActivity extends Activity {
             Log.w(TAG, "cannot start Node" + (viaLinker ? " via linker64" : "") + ": " + e.getMessage());
             return null;
         }
+        nodeProcess = proc;
         final Process running = proc;
         // The server prints its banner and every `[mobile] ...` line; forward them to logcat.
         new Thread(new Runnable() {
@@ -538,6 +764,7 @@ public class MainActivity extends Activity {
         }, "sp-node-log").start();
         try {
             int code = proc.waitFor();
+            if (nodeProcess == proc) nodeProcess = null;
             Log.i(TAG, "Node exited with " + code + (viaLinker ? " (linker64)" : ""));
             return Integer.valueOf(code);
         } catch (InterruptedException e) {

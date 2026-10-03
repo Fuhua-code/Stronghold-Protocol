@@ -266,6 +266,11 @@ async function main() {
     check('the packaged project starts under ' + version, !!hs && hs.ok === true, hs ? `port ${hs.port}, node ${hs.node}, ws ${hs.ws}` : childLog.split('\n').slice(-4).join(' | '));
     if (!hs) throw new Error('no handshake');
     const port = hs.port;
+    const pkg = JSON.parse(await fsp.readFile(path.join(projectDir, 'package.json'), 'utf8'));
+    const build = JSON.parse(await fsp.readFile(path.join(projectDir, 'BUILD-INFO.json'), 'utf8'));
+    const health = await request(port, '/healthz');
+    check('packaged release versions agree', hs.version === pkg.version && build.version === pkg.version
+      && JSON.parse(health.body.toString()).app === pkg.version, `release ${pkg.version}`);
 
     for (const [p, type] of [['/', 'text/html'], ['/data.js', 'text/javascript'], ['/sim/simdata.js', 'text/javascript'], ['/vendor/pixi.min.js', 'text/javascript'], ['/fonts/fonts.css', 'text/css'], ['/data/chess.json', 'application/json']]) {
       const r = await request(port, p);
@@ -286,6 +291,13 @@ async function main() {
       else if (n && typeof n === 'object') Object.values(n).forEach(walk);
     };
     walk(index);
+    const bgm = urls.find(url => url.startsWith('/assets/audio/') && /\.(mp3|ogg|wav)$/.test(url));
+    if (bgm) {
+      const media = bgm.replace('/assets/audio/', '/media/').replace(/\.[^.]+$/, '');
+      const audio = await request(port, media, { headers: { Range: 'bytes=0-99' } });
+      check('0.1.1 extension-less media route and ranges', audio.status === 206 && audio.body.length === 100
+        && String(audio.headers['content-type'] || '').startsWith('audio/'), `${audio.status} ${audio.headers['content-type']}`);
+    }
     const uniq = [...new Set(urls)];
     const step = Math.max(1, Math.floor(uniq.length / o.sample));
     const sample = uniq.filter((_, i) => i % step === 0).slice(0, o.sample);
