@@ -280,7 +280,8 @@ lib/x86_64/: libnode.so libc++_shared.so libcrypto.so libssl.so libicuuc.so libi
 | `npm run apk` 报缺少素材 | 首次运行会自动下载；若被网络中断，`--no-fetch-assets` 也可出包（用占位图），或手动 `node tools/fetch-assets.mjs` 续传。 |
 | 报 `xz is not available` | 解包 Termux 包需要 `xz`；Windows 10+ 自带 `tar`，`xz` 可用 `winget install xz` / `scoop install xz` 安装。 |
 | 报 `no JDK 17+ found` 且无法下载 | 用 `--toolchain=<目录>` 指向已有 JDK/SDK，或设置 `JAVA_HOME`。 |
-| 安装时报「签名不一致」 | 之前装过别的密钥签名的版本：`adb uninstall io.prts.stronghold` 后重装。 |
+| 安装时报「签名不一致 / 已安装签名冲突的应用」**但原应用已卸载** | 三种原因，按顺序排查：① **拷进手机时只拷了 APK**：旧版本会在 APK 旁边生成 `<apk>.idsig`（v4 签名）文件，Android 11+ 的安装器看到它就要求配套文件，缺失时报签名错误。**现在打包器已关闭 v4 签名，并在每次构建后清掉旧 `.idsig`**（`npm run apk:doctor` 也会提示）——用新包即可；② **应用分身 / 多用户**：分身在另一个用户（通常是 `999`）里也持有一份，主用户卸载它仍在，用 `adb shell pm list packages --user 999 io.prts.stronghold` 查、`adb shell pm uninstall --user 999 io.prts.stronghold` 删；③ **第三方安全软件的「应用锁/净化」**残留了同包名条目，先在安全中心里解除。 |
+| 安装时报「应用未安装」且无更多信息 | 空间不足（安装包 352 MB / 多架构包 511 MB，另需 262 MB 解压空间）或下载/传输过程中被截断；重新完整拷贝一次，必要时 `adb install -r <apk>` 让它给出具体错误码。 |
 | 卡在「正在解压美术与音频…」 | 正常，约 4000 个文件 / 262 MB；确认手机剩余空间 ≥ 650 MB（默认 352 MB 安装包 + 262 MB 解压；多架构包为 511 MB）。 |
 | 卡在「正在启动本机服务器…」后显示错误页 | `adb logcat -s StrongholdProtocol` 看 Node 报错；多为素材解压不完整 →「设置 → 应用 → 清除数据」后重开。 |
 | 「Node 运行时缺失」 | ① APK 用 `--no-node` 构建的客户端壳 → 用默认参数重建；② 设备 ABI 不在包里（错误信息会列出包内 ABI 与本机 ABI）：**32 位 arm 手机**用 `npm run apk:all`（或 `--abi=armeabi-v7a`），**模拟器**用 `npm run apk:all`（或 `--abi=x86_64`）。 |

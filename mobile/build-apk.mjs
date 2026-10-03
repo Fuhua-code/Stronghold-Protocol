@@ -1384,11 +1384,19 @@ async function main() {
   ok(`aligned (${alignment.detail})`);
   const store = await ensureKeystore(javaHome);
   await fsp.rm(apkOut, { force: true });
+  // v2+v3 only, and v4 explicitly off: v4 signing writes a separate `<apk>.idsig` next to the APK, and the
+  // Android 11+ installer then expects that file beside the APK it is given — copying just the APK to the phone
+  // (or any transfer that drops the sidecar) makes it report a signature/verification problem, which reads like
+  // "the app conflicts with an existing package". The APK alone must be enough to install, so no v4.
   run(sdk.apksigner, ['sign', '--ks', KEYSTORE, '--ks-pass', `pass:${store.password}`, '--key-pass', `pass:${store.password}`,
     '--ks-key-alias', store.alias, '--min-sdk-version', TOOLS.minSdk,
     '--v1-signing-enabled', 'false', '--v2-signing-enabled', 'true', '--v3-signing-enabled', 'true',
+    '--v4-signing-enabled', 'false',
     '--out', apkOut, aligned], { env });
   await fsp.rm(aligned, { force: true });
+  // drop a stray `.idsig` from an older build: leaving it behind is exactly what confuses the on-device installer
+  const staleIdsig = `${apkOut}.idsig`;
+  if (exists(staleIdsig)) { await fsp.rm(staleIdsig, { force: true }); warn(`removed a stale ${path.basename(staleIdsig)} (v4 signature; not needed, and it breaks manual installs)`); }
   ok(`signed: ${path.relative(REPO, apkOut)}`);
 
   // 10. verify

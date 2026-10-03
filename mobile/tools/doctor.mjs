@@ -215,6 +215,12 @@ section('5. 安卓设备（可选）/ device');
         .map((f) => path.join(BUILD, f))
       : [];
     line(apk.length ? 'ok' : 'skip', '已构建的 APK', apk.length ? apk.map((p) => `${path.basename(p)} (${mb(fs.statSync(p).size)})`).join(', ') : '尚未构建（npm run apk）');
+    // A leftover `<apk>.idsig` (v4 signature) makes the phone's installer look for a sidecar file; if only the APK
+    // is copied over, the install fails with a signature-verification error even though the APK itself is fine.
+    const idsig = apk.map((p) => `${p}.idsig`).filter((p) => fs.existsSync(p));
+    if (idsig.length) {
+      line('warn', '残留的 v4 签名文件（.idsig）', `${idsig.map((p) => path.basename(p)).join(', ')} — 手动安装时只需拷 APK；重跑 npm run apk 会自动清掉`);
+    }
   }
 }
 
