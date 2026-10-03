@@ -48,48 +48,35 @@ const DT_STRSZ = 10;
 const DT_SONAME = 14;
 
 /**
- * Rewrite the `DT_NEEDED`/`DT_SONAME` strings of an ELF shared object or executable — ELF64 and ELF32, both
- * little-endian (aarch64/x86_64 and arm/x86 respectively, which is what the Termux runtime consists of).
+ * Rewrite the `DT_NEEDED`/`DT_SONAME` strings of an ELF64 little-endian shared object.
  * @param {Buffer} buf
  * @param {(name: string) => string | null} rename maps a name to its replacement (null = keep)
  * @returns {{ buf: Buffer, changed: string[] }}
  */
 export function patchElfSonames(buf, rename) {
   if (buf.length < 64 || buf.readUInt32LE(0) !== 0x464c457f) throw new Error('not an ELF file');
-  const is64 = buf[4] === 2;
-  if (!is64 && buf[4] !== 1) throw new Error(`unsupported ELF class ${buf[4]}`);
-  if (buf[5] !== 1) throw new Error('only little-endian ELF is supported');
-
-  // ELF32 (arm, x86) and ELF64 (aarch64, x86_64) differ in every field width *and* in the section-header layout.
-  const SH_OFFSET = is64 ? 0x28 : 0x20;   // e_shoff
-  const SH_ENTSIZE = is64 ? 0x3a : 0x2e;  // e_shentsize
-  const SH_NUM = is64 ? 0x3c : 0x30;      // e_shnum
-  const SH_TYPE = 4;                      // sh_type   (same offset in both classes)
-  const SH_ADDR = is64 ? 0x10 : 0x0c;     // sh_addr
-  const SH_FILE = is64 ? 0x18 : 0x10;     // sh_offset
-  const SH_SIZE = is64 ? 0x20 : 0x14;     // sh_size
-  const DYN_ENTSIZE = is64 ? 16 : 8;
-  const readWord = (off) => (is64 ? Number(buf.readBigUInt64LE(off)) : buf.readUInt32LE(off));
-
-  const eShoff = readWord(SH_OFFSET);
-  const eShentsize = buf.readUInt16LE(SH_ENTSIZE);
-  const eShnum = buf.readUInt16LE(SH_NUM);
+  if (buf[4] !== 2 || buf[5] !== 1) throw new Error('only 64-bit little-endian ELF is supported');
+  const eShoff = Number(buf.readBigUInt64LE(0x28));
+  const eShentsize = buf.readUInt16LE(0x3a);
+  const eShnum = buf.readUInt16LE(0x3c);
 
   let dyn = null;
   for (let i = 0; i < eShnum; i++) {
     const off = eShoff + i * eShentsize;
-    if (buf.readUInt32LE(off + SH_TYPE) === 6 /* SHT_DYNAMIC */) {
-      dyn = { offset: readWord(off + SH_FILE), size: readWord(off + SH_SIZE) };
+    const type = buf.readUInt32LE(off + 4);
+    if (type === 6 /* SHT_DYNAMIC */) {
+      dyn = { offset: Number(buf.readBigUInt64LE(off + 0x18)), size: Number(buf.readBigUInt64LE(off + 0x20)) };
       break;
     }
   }
   if (!dyn) throw new Error('no .dynamic section');
 
   const entries = [];
-  for (let p = dyn.offset; p + DYN_ENTSIZE <= dyn.offset + dyn.size; p += DYN_ENTSIZE) {
-    const tag = is64 ? Number(buf.readBigInt64LE(p)) : buf.readInt32LE(p);
+  for (let p = dyn.offset; p + 16 <= dyn.offset + dyn.size; p += 16) {
+    const tag = Number(buf.readBigInt64LE(p));
+    const val = buf.readBigUInt64LE(p + 8);
     if (tag === DT_NULL) break;
-    entries.push({ tag, val: readWord(p + (is64 ? 8 : 4)) });
+    entries.push({ p, tag, val });
   }
   const strtabVaddr = entries.find((e) => e.tag === DT_STRTAB)?.val;
   const strsz = entries.find((e) => e.tag === DT_STRSZ)?.val;
@@ -99,12 +86,13 @@ export function patchElfSonames(buf, rename) {
   let strtabOff = null;
   for (let i = 0; i < eShnum; i++) {
     const off = eShoff + i * eShentsize;
-    if (buf.readUInt32LE(off + SH_TYPE) !== 3 /* SHT_STRTAB */) continue;
-    if (readWord(off + SH_ADDR) === strtabVaddr) { strtabOff = readWord(off + SH_FILE); break; }
+    if (buf.readUInt32LE(off + 4) !== 3 /* SHT_STRTAB */) continue;
+    const addr = Number(buf.readBigUInt64LE(off + 0x10));
+    if (addr === Number(strtabVaddr)) { strtabOff = Number(buf.readBigUInt64LE(off + 0x18)); break; }
   }
-  // fall back: .dynstr usually sits right after .dynamic
+  // fall back: .dynstr usually follows .dynamic closely; locate it by the first readable string
   if (strtabOff == null) strtabOff = dyn.offset + dyn.size;
-  const strEnd = strtabOff + strsz;
+  const strEnd = strtabOff + Number(strsz);
 
   const readStr = (offset) => {
     const end = buf.indexOf(0, offset);
@@ -122,7 +110,7 @@ export function patchElfSonames(buf, rename) {
   const changed = [];
   for (const e of entries) {
     if (e.tag !== DT_NEEDED && e.tag !== DT_SONAME) continue;
-    const offset = strtabOff + e.val;
+    const offset = strtabOff + Number(e.val);
     const current = readStr(offset);
     if (!current) continue;
     const next = rename(current);

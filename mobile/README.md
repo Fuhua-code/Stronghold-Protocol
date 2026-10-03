@@ -11,13 +11,13 @@ npm run apk
 （取决于网速）；之后重跑只需十几秒到一分钟。产物：
 
 ```
-mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a.apk                        约 352 MB，v2+v3 已签名（默认：64 位手机）
-mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a-armeabi-v7a-x86_64.apk    约 511 MB（npm run apk:all：老手机 + 模拟器）
+mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a.apk     约 352 MB，v2+v3 已签名（默认：手机）
+mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a-x86_64.apk   约 440 MB（npm run apk:all：手机 + 模拟器）
 ```
 
-文件名带 ABI，所以几种包可以在同一目录并存、互不覆盖。默认只打 arm64（手机只需要自己那一套 ABI，Android 也
-只会解压与设备相符的 `lib/<abi>/`）；要在 **32 位 ARM 老手机**或 **x86_64 模拟器**（MuMu / 雷电 / 蓝叠 /
-Google AOSP 镜像）上跑，加 `npm run apk:all`。
+文件名带 ABI，所以两种包可以在同一目录并存、互不覆盖。默认只打 arm64（手机就只需要自己那一套 ABI，Android 也
+只会解压与设备相符的 `lib/<abi>/`）；要在 **x86_64 模拟器**（MuMu / 雷电 / 蓝叠 / Google AOSP 镜像）上跑，加
+`npm run apk:all`。
 
 > 这是玩家自制的**非官方同人作品**，与鹰角网络、Yostar 无关；《明日方舟》及「卫戍协议」相关素材版权归原权
 > 利人所有，**不适用**本项目的 GPL，仅供学习交流与个人非商业使用，**严禁任何形式的盈利**。APK 请勿上架
@@ -29,9 +29,9 @@ Google AOSP 镜像）上跑，加 `npm run apk:all`。
 
 | 命令 | 作用 |
 |---|---|
-| `npm run apk` | **一键**：准备 + 构建 + 签名 + 核验，产出 APK（默认仅 arm64-v8a，64 位手机用） |
-| `npm run apk:all` | 同上，但同时打包 **arm64-v8a + armeabi-v7a + x86_64**（32 位老手机 + 模拟器，+150 MB） |
-| `npm run apk:doctor` | 体检：主机、仓库、运行时来源、工具链、已连接手机（含**应用分身里残留的旧副本**检测），逐项给结论与下一步 |
+| `npm run apk` | **一键**：准备 + 构建 + 签名 + 核验，产出 APK（默认仅 arm64-v8a，手机用） |
+| `npm run apk:all` | 同上，但同时打包 **arm64-v8a + x86_64**（模拟器用，+88 MB，文件名带 ABI） |
+| `npm run apk:doctor` | 体检：主机、仓库、运行时来源、工具链、已连接手机，逐项给结论与下一步 |
 | `npm run apk:check` | 自检：**不构建**，只验证「这个克隆能不能出包」（11 项） |
 | `npm run apk:prepare` | 只准备（工具链 + Node 运行时 + 待打包目录），不打 APK |
 | `npm run apk:verify` | 构建后跑三项验证：服务器自检 → APK 解包实跑 → 无头浏览器点到休整期 |
@@ -41,8 +41,7 @@ Google AOSP 镜像）上跑，加 `npm run apk:all`。
 `mobile/build-apk.mjs` 也直接接受参数：
 
 ```bash
-node mobile/build-apk.mjs --all-abis              # 等于 npm run apk:all（三种 ABI）
-node mobile/build-apk.mjs --abi=armeabi-v7a       # 只打 32 位老手机用的那一套
+node mobile/build-apk.mjs --all-abis              # 等于 npm run apk:all（arm64 + x86_64）
 node mobile/build-apk.mjs --abi=x86_64            # 只打模拟器用的那一套
 node mobile/build-apk.mjs --check                 # 等于 npm run apk:check
 node mobile/build-apk.mjs --prepare               # 等于 npm run apk:prepare
@@ -53,18 +52,6 @@ node mobile/build-apk.mjs --no-fetch-assets       # 不下载素材（用占位�
 node mobile/build-apk.mjs --no-download           # 一律不联网下载，缺什么就报错
 node mobile/build-apk.mjs --no-node               # 只做客户端壳（需要另有一台真实服务器）
 ```
-
-**支持哪些架构**：Termux 对几种安卓架构发布的是**同一版本**的 Node（24.18.0），所以都由同一个打包器支持：
-
-| ABI | 设备 | 默认包 | `--all-abis` |
-|---|---|---|---|
-| `arm64-v8a` | 64 位手机（绝大多数） | ✔ | ✔ |
-| `armeabi-v7a` | 32 位老手机 | – | ✔（+70 MB） |
-| `x86_64` | MuMu / 雷电 / 蓝叠 / Google AOSP 镜像 | – | ✔（+88 MB） |
-| `x86`（i686） | 少数安卓 x86 平板 / 老模拟器 | – | 用 `--abi=x86` 单独出 |
-
-Android 只解压与设备相符的那一套 `lib/<abi>/`，所以默认包只带手机需要的 arm64；万一装错架构，应用会明确报出
-「包内 ABI / 本机 ABI」，而不是静默失败。
 
 ---
 
@@ -152,20 +139,19 @@ assets/nodejs-project/
 | 4. 联机 | 同盟模拟 → 创建房间 → 把「同盟密钥」或「复制链接」发给朋友；朋友在同一 Wi-Fi 下打开应用或任意浏览器即可。日志与应用界面里都有手机自己的局域网地址。 |
 | 5. 横屏 | 游戏需要横屏；应用已锁定横屏。 |
 
-**系统要求**：Android 7.0（API 24）或更高、**arm64-v8a / armeabi-v7a（手机）或 x86_64（模拟器）**、系统
-WebView 可更新。手机上需要约 **650 MB** 空闲空间（默认安装包 352 MB + 首次解压 262 MB）；`npm run apk:all`
-的多架构包为 511 MB。
+**系统要求**：Android 7.0（API 24）或更高、**arm64-v8a（手机）或 x86_64（模拟器）**、系统 WebView 可更新。
+手机上需要约 **650 MB** 空闲空间（默认安装包 352 MB + 首次解压 262 MB）；`npm run apk:all` 的双版本包为
+440 MB。
 
 **在安卓模拟器上跑**（MuMu / LDPlayer / BlueStacks / Google AOSP 镜像都是 x86_64）：
 
 ```bash
-npm run apk:all                            # 一个 APK 带三套运行时（arm64 + arm32 + x86_64）
+npm run apk:all                            # 手机 + 模拟器：一个 APK 里带两套运行时
 adb connect 127.0.0.1:5555                 # MuMu 的调试端口（模拟器界面里可查；蓝叠/雷电常用 5555 / 7555）
-adb -s 127.0.0.1:5555 install -r mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a-armeabi-v7a-x86_64.apk
+adb -s 127.0.0.1:5555 install -r mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a-x86_64.apk
 ```
 
-也可以按需单独出包：`node mobile/build-apk.mjs --abi=x86_64`（模拟器）、`--abi=armeabi-v7a`（32 位老手机），
-各约 352 MB。
+也可以 `npm run apk && node mobile/build-apk.mjs --abi=x86_64` 分别出两个单 ABI 的包（各约 352 MB）。
 模拟器内存建议 4 GB 以上（战斗在 WebView 里模拟）。
 
 **与桌面版的差异**
@@ -240,7 +226,7 @@ WebView loading http://127.0.0.1:37305/
 
 ```
 adb connect 127.0.0.1:5555
-adb -s 127.0.0.1:5555 install -r mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a-armeabi-v7a-x86_64.apk    # Success
+adb -s 127.0.0.1:5555 install -r mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a-x86_64.apk    # Success
 # 解压出的运行时（MuMu 只解压与自己 ABI 相符的一套）
 lib/x86_64/: libnode.so libc++_shared.so libcrypto.so libssl.so libicuuc.so libicui18n.so
              libicudata.so libcares.so libsqlite3.so libz.so
@@ -255,22 +241,6 @@ lib/x86_64/: libnode.so libc++_shared.so libcrypto.so libssl.so libicuuc.so libi
 （`node` → `libnode.so` 等）并就地改写 ELF 的 `DT_NEEDED` / `DT_SONAME`
 （`tools/patch-elf-sonames.mjs`），10 个文件全部落地、可执行。
 
-### 32 位 ARM 手机（armeabi-v7a）
-
-同一类症状在**部分 arm 手机**上也会出现，原因不同：那些设备的 `lib/` 目录是 `lib/arm`（32 位），而早先的包只带
-`arm64-v8a`，于是设备解压不出任何运行时文件。修法与验证：
-
-- Termux 对 `arm` 架构发布的是**同一版本**的 Node（`nodejs-lts 24.18.0-1_arm.deb`，连同 libc++、openssl、
-  c-ares、libicu、libsqlite、zlib 都在），所以 `--all-abis` 现在把 `armeabi-v7a` 一起打进包；
-- `patch-elf-sonames.mjs` 现在同时支持 **ELF32 与 ELF64**（32 位 ARM 的 ELF 头、节表、`.dynamic` 条目宽度都不同），
-  32 位运行时的 `DT_NEEDED` / `DT_SONAME` 同样被改写成 Android 合法短名；
-- 应用启动时按运行时二进制的 ELF 类别选择回退链接器：64 位用 `/system/bin/linker64`，32 位用
-  `/system/bin/linker`（用错会直接报 `EM_ARM (40) instead of EM_386 (3)`）；直接执行优先，只有被 W^X 拒绝时才回退；
-- 实测（MuMu 的 ARM 翻译环境）：32 位运行时 `node` 报 `v24.18.0 arch arm`，游戏服务器在 32 位下正常启动
-  （`healthz 200`、`websocket ok`）。
-
-32 位手机请用 `npm run apk:all`（或 `--abi=armeabi-v7a` 单独出包）。
-
 ---
 
 ## 七、排错
@@ -280,11 +250,10 @@ lib/x86_64/: libnode.so libc++_shared.so libcrypto.so libssl.so libicuuc.so libi
 | `npm run apk` 报缺少素材 | 首次运行会自动下载；若被网络中断，`--no-fetch-assets` 也可出包（用占位图），或手动 `node tools/fetch-assets.mjs` 续传。 |
 | 报 `xz is not available` | 解包 Termux 包需要 `xz`；Windows 10+ 自带 `tar`，`xz` 可用 `winget install xz` / `scoop install xz` 安装。 |
 | 报 `no JDK 17+ found` 且无法下载 | 用 `--toolchain=<目录>` 指向已有 JDK/SDK，或设置 `JAVA_HOME`。 |
-| 安装报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`（「已安装签名冲突的应用」）**但主用户里已卸载** | **绝大多数情况是「应用分身」**：分身会在另一个 Android 用户里保留自己的一份副本，主用户卸载删不掉它，下一次安装就会与那份旧签名冲突。真机实测（realme RMX3820）：`io.prts.stronghold` 残留在 `10:system_clone` 里，`pm path` 在主用户下是空的，所以「检查已删除」查不出来。**一条命令解决**（`npm run apk:doctor` 会直接把设备和用户号列出来）：<br>`adb shell pm list packages -u \| grep prts` 找出所有用户<br>`adb shell pm uninstall --user <用户号> io.prts.stronghold`<br>然后在手机上「设置 → 应用分身 / 双开」里也删掉该分身。其他可能：① 小米「手机分身」/ 三星「Dual Messenger」/ 华为「应用分身」同理；② 第三方安全软件的「净化 / 应用锁」残留同包名条目；③ 拷进手机时只拷了 APK 而旧包旁边留着 `<apk>.idsig`（v4 签名，Android 11+ 会要求配套文件）——**打包器现在已关闭 v4 签名并自动清理 `.idsig`**，用新包即可。 |
-| 安装时报「应用未安装」且无更多信息 | 空间不足（安装包 352 MB / 多架构包 511 MB，另需 262 MB 解压空间）或传输过程中被截断；重新完整拷贝一次，必要时用 `adb install -r <apk>` 让它给出具体错误码。 |
-| 卡在「正在解压美术与音频…」 | 正常，约 4000 个文件 / 262 MB；确认手机剩余空间 ≥ 650 MB（默认 352 MB 安装包 + 262 MB 解压；多架构包为 511 MB）。 |
+| 安装时报「签名不一致」 | 之前装过别的密钥签名的版本：`adb uninstall io.prts.stronghold` 后重装。 |
+| 卡在「正在解压美术与音频…」 | 正常，约 4000 个文件 / 262 MB；确认手机剩余空间 ≥ 650 MB（默认 352 MB 安装包 + 262 MB 解压；双版本包为 440 MB）。 |
 | 卡在「正在启动本机服务器…」后显示错误页 | `adb logcat -s StrongholdProtocol` 看 Node 报错；多为素材解压不完整 →「设置 → 应用 → 清除数据」后重开。 |
-| 「Node 运行时缺失」 | ① APK 用 `--no-node` 构建的客户端壳 → 用默认参数重建；② 设备 ABI 不在包里（错误信息会列出包内 ABI 与本机 ABI）：**32 位 arm 手机**用 `npm run apk:all`（或 `--abi=armeabi-v7a`），**模拟器**用 `npm run apk:all`（或 `--abi=x86_64`）。 |
+| 「Node 运行时缺失」 | ① APK 用 `--no-node` 构建的客户端壳 → 用默认参数重建；② 设备 ABI 不在包里（错误信息会列出包内 ABI 与本机 ABI）→ 加 `--abi=` 重建。模拟器请用默认双 ABI 构建。 |
 | 朋友连不上 | 确认在同一 Wi-Fi；访客网络常开「AP 隔离」会禁止设备互访；把日志里的局域网地址或房间链接发给对方即可。 |
 | 画面卡顿 | 游戏内「设置」降画质；低端机可用 `?render=fallback`。 |
 

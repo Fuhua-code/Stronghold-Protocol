@@ -1,20 +1,19 @@
 #!/usr/bin/env node
 // mobile/build-apk.mjs — the Android packager: turn this repository into a standalone Android APK.
 //
-//   node mobile/build-apk.mjs                 build the APK (arm64-v8a, i.e. 64-bit phones)
-//   node mobile/build-apk.mjs --all-abis      build for phones (arm64 **and** 32-bit arm) and x86_64 emulators
+//   node mobile/build-apk.mjs                 build the APK (arm64-v8a, i.e. phones)
+//   node mobile/build-apk.mjs --all-abis      build for phones **and** x86_64 emulators in one APK
 //   node mobile/build-apk.mjs --prepare       only prepare (toolchain + Termux Node runtime + assets tree)
 //   node mobile/build-apk.mjs --check         build nothing: verify the toolchain, the runtime, the art and the module graph
 //
 //   npm run apk            (same as the first line)      → …-arm64-v8a.apk
-//   npm run apk:all        (same as --all-abis)          → …-arm64-v8a-armeabi-v7a-x86_64.apk
+//   npm run apk:all        (same as --all-abis)          → …-arm64-v8a-x86_64.apk
 //   npm run apk:prepare    (same as --prepare)
 //   npm run apk:check      (same as --check)
 //
-//     --all-abis          package arm64-v8a, armeabi-v7a **and** x86_64 (adds ~150 MB): 64-bit phones, the older
-//                         32-bit ARM phones (Termux still publishes `arm` packages, same Node version) and the
-//                         x86_64 emulators (MuMu, LDPlayer, BlueStacks, the Google AOSP/Play images)
-//     --abi=<list>        explicit ABI list; overrides --all-abis (arm64-v8a, armeabi-v7a, x86_64, x86)
+//     --all-abis          package arm64-v8a **and** x86_64 (adds ~88 MB; for MuMu, LDPlayer, BlueStacks, the
+//                         Google AOSP/Play images — every one of them is x86_64)
+//     --abi=<list>        explicit ABI list; overrides --all-abis (arm64-v8a, x86_64)
 //     --out=<file>        output APK path (default: the file name carries the ABIs it contains)
 //     --with-dev          also package public/dev (the in-browser dev harnesses; not needed to play)
 //     --fetch-assets      download the game art even if it is present, and never ask
@@ -27,9 +26,8 @@
 //     -h, --help          this text
 //
 // Why arm64 only by default: a phone only ever needs its own ABI, and Android unpacks just the `lib/<abi>/`
-// directory that matches the device — so the extra copies are dead weight on any single device (~70 MB for arm32,
-// ~88 MB for x86_64). Users of the other ABIs opt in with `--all-abis`, which writes a differently named file so
-// the variants can sit side by side.
+// directory that matches the device — so the extra copy is dead weight (88 MB) on the phone. Emulator users opt in
+// with `--all-abis`, which writes a differently named file so both variants can sit side by side.
 //
 // What it does, in order (see mobile/README.md):
 //   0. one-command setup: `npm install` when node_modules is missing, `tools/fetch-assets.mjs` when the art is
@@ -105,33 +103,26 @@ const TOOLS = {
 };
 
 /**
- * Android ABI → the architecture name the Termux packages use. Termux publishes all of them with the same Node
- * version (aarch64, arm, x86_64, i686), which is what lets one packager cover phones — 64-bit *and* the older
- * 32-bit arm ones — plus emulators (x86_64) and Android-on-x86 tablets (i686).
+ * Android ABI → the architecture name the Termux packages use. Phones are `aarch64`; every mainstream Android
+ * emulator (MuMu, LDPlayer, BlueStacks, the Google AOSP/Play images on a PC) is `x86_64`, and Termux publishes
+ * both — so both fit in one APK and Android unpacks the one that matches the device.
  */
 const ABI_ALIASES = {
   'arm64-v8a': 'arm64-v8a', arm64: 'arm64-v8a', aarch64: 'arm64-v8a',
-  'armeabi-v7a': 'armeabi-v7a', arm: 'armeabi-v7a', armv7: 'armeabi-v7a', arm32: 'armeabi-v7a',
   x86_64: 'x86_64', x64: 'x86_64', amd64: 'x86_64',
-  x86: 'x86', i686: 'x86', i386: 'x86',
 };
-const ABI_TERMUX = { 'arm64-v8a': 'aarch64', 'armeabi-v7a': 'arm', x86_64: 'x86_64', x86: 'i686' };
-/** Phones are arm64; every other ABI is opt-in through `--all-abis` or `--abi=`. */
+const ABI_TERMUX = { 'arm64-v8a': 'aarch64', x86_64: 'x86_64' };
+/** Phones are arm64; x86_64 (emulators) is opt-in through `--all-abis`. */
 const DEFAULT_ABIS = ['arm64-v8a'];
-/** What `--all-abis` packages: phones (both arm flavours) **and** the usual Android emulators. */
-const ALL_ABIS = ['arm64-v8a', 'armeabi-v7a', 'x86_64'];
+/** What `--all-abis` packages: phones **and** every mainstream Android emulator. */
+const ALL_ABIS = ['arm64-v8a', 'x86_64'];
 
 /**
  * The shared libraries the runtime needs, under the names they get **after** `patch-elf-sonames.mjs` has made them
  * Android-legal (see `stageRuntime`). Android only extracts `lib*.so` shaped entries, so the versioned Termux
- * sonames (`libcrypto.so.3`, `libicuuc.so.78`, …) are shortened and the ELF records are rewritten to match. Names
- * that already end in `.so` (the 32-bit ARM build uses `libcrypto.so`) pass through unchanged, so this derivation
- * describes every architecture.
+ * sonames (`libcrypto.so.3`, `libicuuc.so.78`, …) are shortened and the ELF records are rewritten to match.
  */
-const RUNTIME_LIBS = [...new Set(TERMUX.packages
-  .flatMap((p) => Object.values(p.libs || {}))
-  .map((name) => /^(lib[^/]+?\.so)(?:\.[0-9].*)?$/.exec(name)?.[1])
-  .filter(Boolean))];
+const RUNTIME_LIBS = ['libc++_shared.so', 'libcares.so', 'libsqlite3.so', 'libcrypto.so', 'libssl.so', 'libicuuc.so', 'libicui18n.so', 'libicudata.so', 'libz.so'];
 
 const APP = {
   package: 'io.prts.stronghold',
@@ -1008,7 +999,7 @@ function parseArgs(argv) {
     // `--out <file>` and `--out=<file>` are both accepted; a flag value is never another `--flag`
     const value = () => (inline !== undefined ? inline : (argv[i + 1] !== undefined && !String(argv[i + 1]).startsWith('--') ? argv[++i] : ''));
     if (key === '--abi') { o.abis = String(value() || '').split(',').map((s) => ABI_ALIASES[s.trim()]).filter(Boolean); o.explicitAbis = true; }
-    else if (key === '--all-abis' || key === '--abis' || key === '--all') { o.abis = [...ALL_ABIS]; o.explicitAbis = true; }
+    else if (key === '--all-abis' || key === '--abis' || key === '--with-x86' || key === '--x86') o.abis = [...ALL_ABIS];
     else if (key === '--out') o.out = value();
     else if (key === '--with-dev') o.withDev = true;
     else if (key === '--no-node' || key === '--no-nodejs-mobile') o.node = false;
@@ -1384,19 +1375,11 @@ async function main() {
   ok(`aligned (${alignment.detail})`);
   const store = await ensureKeystore(javaHome);
   await fsp.rm(apkOut, { force: true });
-  // v2+v3 only, and v4 explicitly off: v4 signing writes a separate `<apk>.idsig` next to the APK, and the
-  // Android 11+ installer then expects that file beside the APK it is given — copying just the APK to the phone
-  // (or any transfer that drops the sidecar) makes it report a signature/verification problem, which reads like
-  // "the app conflicts with an existing package". The APK alone must be enough to install, so no v4.
   run(sdk.apksigner, ['sign', '--ks', KEYSTORE, '--ks-pass', `pass:${store.password}`, '--key-pass', `pass:${store.password}`,
     '--ks-key-alias', store.alias, '--min-sdk-version', TOOLS.minSdk,
     '--v1-signing-enabled', 'false', '--v2-signing-enabled', 'true', '--v3-signing-enabled', 'true',
-    '--v4-signing-enabled', 'false',
     '--out', apkOut, aligned], { env });
   await fsp.rm(aligned, { force: true });
-  // drop a stray `.idsig` from an older build: leaving it behind is exactly what confuses the on-device installer
-  const staleIdsig = `${apkOut}.idsig`;
-  if (exists(staleIdsig)) { await fsp.rm(staleIdsig, { force: true }); warn(`removed a stale ${path.basename(staleIdsig)} (v4 signature; not needed, and it breaks manual installs)`); }
   ok(`signed: ${path.relative(REPO, apkOut)}`);
 
   // 10. verify
@@ -1425,7 +1408,7 @@ async function main() {
   log(`  install   adb install -r "${apkOut}"   (or copy it to the phone and open it)`);
   log(`  sums      ${path.relative(REPO, sums)}`);
   if (!o.explicitAbis && o.abis.length === 1 && o.abis[0] === 'arm64-v8a') {
-    log(`  \x1b[2mother architectures (32-bit ARM phones, x86_64 emulators): npm run apk:all\x1b[0m`);
+    log(`  \x1b[2mfor an Android emulator (x86_64) build both ABIs: npm run apk:all\x1b[0m`);
   }
   log('');
   return 0;
