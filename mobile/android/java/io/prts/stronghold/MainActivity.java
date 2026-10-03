@@ -14,9 +14,10 @@
 //        node <filesDir>/nodejs-project/mobile/node/main.js
 //             --public <filesDir>/nodejs-project/public --data <filesDir>/nodejs-project/data
 //             --handshake <filesDir>/handshake.json
-//      either directly (most ROMs allow exec from the app's data directory) or, when that fails, through
-//      `/system/bin/linker64 <node> …`, which loads the executable as a shared object and sidesteps the Android 10+
-//      exec restriction (`execve` returns EACCES for files in the app's private storage);
+//      either directly (most ROMs allow exec from the app's data directory) or, when that fails, through the
+//      system linker (`/system/bin/linker64`, or `/system/bin/linker` for a 32-bit runtime), which loads the
+//      executable as a shared object and sidesteps the Android 10+ exec restriction (`execve` returns EACCES for
+//      files in the app's private storage);
 //   4. a watcher thread waits for handshake.json (written by main.js after the server answered /healthz and a
 //      WebSocket upgrade) and then loads http://127.0.0.1:<port>/ — one origin, so WebSocket, audio, touch and the
 //      safe-area insets behave exactly like in a browser tab;
@@ -306,12 +307,13 @@ public class MainActivity extends Activity {
 
     /**
      * The directory that holds the Node runtime: `ApplicationInfo.nativeLibraryDir`, i.e. where Android extracts
-     * the APK's `lib/<abi>/` entries. The APK ships one runtime per ABI — arm64 for phones, x86_64 for the usual
-     * Android emulators (MuMu, LDPlayer, BlueStacks, AOSP/Play images) — and Android unpacks only the ABI the
-     * device needs, while `nativeLibraryDir` names exactly one of them (`lib/arm64` on a phone, `lib/x86_64` on an
-     * x86 emulator). The candidates below cover both spellings plus the device's own ABI list, so the right runtime
-     * is found either way; a device that got none (an emulator whose native bridge cannot run our code) reports a
-     * clear error instead of failing to start.
+     * the APK's `lib/<abi>/` entries. The APK can ship one runtime per ABI — arm64-v8a for 64-bit phones,
+     * armeabi-v7a for the older 32-bit ARM phones, x86_64 for the usual Android emulators (MuMu, LDPlayer,
+     * BlueStacks, AOSP/Play images) — and Android unpacks only the ABI the device needs, while the directory it
+     * reports names exactly one of them (`lib/arm64` on a 64-bit phone, `lib/arm` on a 32-bit one, `lib/x86_64` on
+     * an x86 emulator). The candidates below cover the different spellings plus the device's own ABI list, so the
+     * runtime is found either way; a device that got none (the ABI it wants is not in the APK) reports a clear
+     * error instead of failing to start.
      *
      * The runtime executable is called `libnode.so`, not `node`: Android only extracts `lib*.so` shaped entries
      * from `lib/` (see the packager's `stageRuntime`), and the executable is renamed together with its libraries'
@@ -471,7 +473,8 @@ public class MainActivity extends Activity {
             public void run() {
                 Integer exit = runNode(nodeArgs, false);
                 if (exit == null) {
-                    Log.i(TAG, "direct exec unavailable - retrying through /system/bin/linker64");
+                    final String linker = linkerFor(node);
+                    Log.i(TAG, "direct exec unavailable - retrying through " + linker);
                     setStatus("正在启动本机服务器…", "通过系统动态链接器启动 Node");
                     exit = runNode(nodeArgs, true);
                 }
@@ -495,12 +498,40 @@ public class MainActivity extends Activity {
     }
 
     /**
+     * The dynamic linker that matches the runtime's ELF class: `/system/bin/linker64` for 64-bit runtimes
+     * (aarch64, x86_64) and `/system/bin/linker` for 32-bit ones (`arm` — the older 32-bit ARM phones — and
+     * `x86`/i686). Asking the 64-bit linker to load a 32-bit ARM runtime fails with
+     * `EM_ARM (40) instead of EM_386 (3)`, which is exactly what a 32-bit phone would have hit.
+     */
+    private String linkerFor(File node) {
+        try {
+            byte[] header = new byte[20];
+            java.io.FileInputStream in = new java.io.FileInputStream(node);
+            int read;
+            try {
+                read = in.read(header);
+            } finally {
+                in.close();
+            }
+            if (read >= 20 && header[0] == 0x7f && header[1] == 'E' && header[2] == 'L' && header[3] == 'F') {
+                boolean is64 = header[4] == 2;
+                int machine = (header[18] & 0xff) | ((header[19] & 0xff) << 8);
+                Log.i(TAG, "runtime ELF: " + (is64 ? "64-bit" : "32-bit") + ", machine " + machine);
+                if (!is64) return "/system/bin/linker";
+            }
+        } catch (IOException e) {
+            Log.w(TAG, "cannot read the ELF header of " + node + ": " + e.getMessage());
+        }
+        return "/system/bin/linker64";
+    }
+
+    /**
      * Run the runtime once. Returns its exit code, or null when the process could not be started at all
      * (`execve` denied) — the caller then retries through the linker.
      */
     private Integer runNode(List<String> nodeArgs, boolean viaLinker) {
         List<String> cmd = new ArrayList<String>();
-        if (viaLinker) cmd.add("/system/bin/linker64");
+        if (viaLinker) cmd.add(linkerFor(runtimeNode()));
         cmd.addAll(nodeArgs);
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.directory(projectDir());
