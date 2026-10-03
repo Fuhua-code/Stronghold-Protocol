@@ -219,6 +219,28 @@ async function main() {
     const traversal = await request(port, '/../package.json');
     check('path traversal refused', traversal.status === 403 || traversal.status === 404, `status ${traversal.status}`);
 
+    // ---- the connect shell (本地/远程 entry, mobile-connect-0.2) ---------------------------------------------
+    const shell = await request(port, '/connect/');
+    check('GET /connect/ → the connect shell',
+      shell.status === 200 && /id="btn-local"/.test(shell.text) && /id="btn-remote"/.test(shell.text),
+      `status ${shell.status}, ${shell.bytes} B`);
+    for (const [p, type] of [['/connect/shell.css', 'text/css'], ['/connect/shell.js', 'text/javascript'], ['/connect/util.js', 'text/javascript']]) {
+      const r = await request(port, p);
+      check(`GET ${p}`, r.status === 200 && String(r.headers['content-type'] || '').startsWith(type),
+        `${r.status} ${r.headers['content-type'] || '-'} ${r.bytes} B`);
+    }
+    // the shell must not shadow the client: a non-localhost entry point keeps serving the game's own page
+    const rootPage = await request(port, '/');
+    check('GET / is still the game client (the shell is only at /connect/)',
+      rootPage.status === 200 && /STRONGHOLD PROTOCOL/.test(rootPage.text) && !/id="btn-local"/.test(rootPage.text),
+      `${rootPage.bytes} B`);
+    // the handshake the app reads must point a *local* player at the shell (that is how the app picks its entry)
+    const connectUrl = hs.connectUrl || '';
+    check('handshake advertises the connect entry for local play',
+      /^http:\/\/127\.0\.0\.1:\d+\/connect\/$/.test(connectUrl), connectUrl || '(missing connectUrl)');
+    const entry = await request(port, '/connect/');
+    check('the advertised entry actually serves the shell', entry.status === 200 && /id="btn-local"/.test(entry.text), `status ${entry.status}`);
+
     const gz = await request(port, '/js/main.js', { headers: { 'Accept-Encoding': 'gzip' } });
     check('gzip branch (content-encoding: gzip)', gz.status === 200 && gz.headers['content-encoding'] === 'gzip',
       `encoding ${gz.headers['content-encoding'] || '-'}`);

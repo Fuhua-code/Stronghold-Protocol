@@ -38,7 +38,8 @@
     "apk:prepare": "node mobile/build-apk.mjs --prepare",
     "apk:check": "node mobile/build-apk.mjs --check",
     "apk:doctor": "node mobile/tools/doctor.mjs",
-    "apk:verify": "node mobile/tools/check-server.mjs && node mobile/tools/check-apk.mjs && node mobile/tools/check-client.mjs"
+    "apk:shell": "node mobile/tools/check-shell.mjs",
+    "apk:verify": "node mobile/tools/check-server.mjs && node mobile/tools/check-shell.mjs && node mobile/tools/check-apk.mjs && node mobile/tools/check-client.mjs"
   },
   "engines": {
     "node": ">=22"

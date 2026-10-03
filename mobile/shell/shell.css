@@ -1,0 +1,187 @@
+/* ==========================================================================================
+   mobile/shell/shell.css — the connect shell (mobile-connect-0.2).
+
+   Everything here is authored in the game's own design pixels (1rem = 100 design px at
+   1920×1080, see public/css/theme.css) and reuses the title screen's classes for the frame,
+   backdrop, corners and text, so the shell matches the game at every resolution: the scale is
+   `min(vw/19.2, vh/10.8)`, and only the two-button split needs breakpoints of its own.
+   ========================================================================================== */
+
+.cnode { position: fixed; inset: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+
+/* the emblem is the title screen's dot-matrix watchtower, drawn into this page's SVG group by shell.js */
+.cnode-emblem { --unused: 0; }
+.cnode .emblem__svg circle { fill: #dfe6e2; animation: dot-twinkle 4.8s ease-in-out infinite; }
+.cnode .emblem__svg circle.d1 { animation-delay: -.7s; }
+.cnode .emblem__svg circle.d2 { animation-delay: -1.4s; }
+.cnode .emblem__svg circle.d3 { animation-delay: -2.1s; }
+.cnode .emblem__svg circle.d4 { animation-delay: -2.8s; }
+.cnode .emblem__svg circle.d5 { animation-delay: -3.5s; }
+.cnode .emblem__svg circle.d6 { animation-delay: -4.2s; }
+.cnode .emblem__svg circle.is-accent { fill: var(--mint-glow); filter: drop-shadow(0 0 .04rem var(--mint-glow)); animation: none; }
+
+/* the console frame: the same box as .title-login, one notch wider (it carries a link field) */
+.cnode-login { width: 5.4rem; }
+.cnode__main { margin-top: -.32rem; }
+
+/* ---- the split button ------------------------------------------------------------------------- */
+/* The 开始 button of the title screen, cut in two. Both halves keep the button's own geometry
+   (height .84rem, the hatch strip, the bracket corners) so they read as one control that opened. */
+.cnode-split { display: flex; width: 100%; gap: .08rem; }
+.cnode-btn {
+  --split-full: 100%;
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  padding: 0 .18rem;
+  letter-spacing: .42em;
+  transition: flex-grow var(--t-slow) var(--ease-out), background-color var(--t-med) var(--ease-out),
+              color var(--t-med) var(--ease-out), box-shadow var(--t-med) var(--ease-out);
+}
+.cnode-btn .cnode-btn__text { position: relative; z-index: 2; padding-left: .42em; }
+/* the "ghost" label only shows while the button grows: a small hint of the other side (Safari 15.4 safe) */
+.cnode-btn .cnode-btn__ghost { display: none; position: relative; z-index: 2; }
+
+/* 本地: mint, the game's primary colour */
+.cnode-btn--local {
+  --btn-bg: transparent;
+  --btn-bg-hover: rgba(78, 216, 175, .10);
+  --btn-fg: var(--mint-400);
+  --btn-bd: var(--mint-700);
+  --btn-bd-hover: var(--mint-500);
+  --btn-glow: rgba(23, 249, 183, .35);
+  --bk-c: var(--mint-500);
+}
+/* 远程: white — the same layout, the "another machine" palette */
+.cnode-btn--remote {
+  --btn-bg: transparent;
+  --btn-bg-hover: rgba(242, 242, 242, .10);
+  --btn-fg: var(--text-hi);
+  --btn-bd: var(--line-3);
+  --btn-bd-hover: #d8ded9;
+  --btn-glow: rgba(242, 242, 242, .3);
+  --bk-c: #d8ded9;
+}
+
+/* Once one side is chosen it grows to 2/3 of the whole control and becomes filled; the other side keeps 1/3 and
+   loses its label (the spec: the growing button shows its own word, the shrinking one hides it). */
+.cnode-split.is-local .cnode-btn--local,
+.cnode-split.is-remote .cnode-btn--remote { flex-grow: 2; }
+.cnode-split.is-local .cnode-btn--remote .cnode-btn__text,
+.cnode-split.is-remote .cnode-btn--local .cnode-btn__text { opacity: 0; }
+.cnode-split.is-local .cnode-btn--local,
+.cnode-split.is-remote .cnode-btn--remote { background-image:
+    repeating-linear-gradient(-55deg, rgba(0, 0, 0, .16) 0 2px, transparent 2px 6px),
+    linear-gradient(180deg, rgba(255, 255, 255, .18), rgba(255, 255, 255, 0) 45%);
+  background-size: .34rem 100%, 100% 100%;
+  background-position: right center, 0 0;
+  background-repeat: no-repeat;
+}
+/* 本地 filled = the game's primary button exactly */
+.cnode-split.is-local .cnode-btn--local {
+  --btn-bg: var(--mint-500);
+  --btn-bg-hover: var(--mint-400);
+  --btn-fg: var(--text-on-mint);
+  --btn-bd: #6fe8c4;
+  --btn-bd-hover: #9dffe2;
+  box-shadow: 0 0 .3rem var(--btn-glow), inset 0 0 0 1px rgba(255, 255, 255, .12);
+}
+/* 远程 filled = the same button in white */
+.cnode-split.is-remote .cnode-btn--remote {
+  --btn-bg: #f2f2f2;
+  --btn-bg-hover: #ffffff;
+  --btn-fg: #0d100f;
+  --btn-bd: #ffffff;
+  --btn-bd-hover: #ffffff;
+  box-shadow: 0 0 .3rem var(--btn-glow), inset 0 0 0 1px rgba(255, 255, 255, .2);
+}
+
+/* ---- the field in link mode -------------------------------------------------------------------- */
+/* 博士代号 → 链接地址: the Chinese label is replaced by shell.js glyph by glyph (stroke segments reassemble),
+   the English micro label fades out and 局域网/公网链接 takes its place; the person icon becomes a chain link. */
+.cnode-label { position: relative; display: inline-block; min-height: 1em; }
+.cnode-label__ghost { position: absolute; inset: 0; opacity: 0; pointer-events: none; }
+.cnode-label__piece { display: inline-block; white-space: pre; transition: opacity 220ms var(--ease-out), transform 220ms var(--ease-out); }
+.cnode-label--morph .cnode-label__piece { opacity: 0; transform: translateY(-.03rem); }
+.cnode-micro { transition: opacity 220ms var(--ease-out); }
+.cnode-hint { min-height: 1em; color: var(--mint-700); }
+.cnode-hint:empty { display: none; }
+
+.cnode-ico { display: inline-flex; align-items: center; justify-content: center; width: .22rem; height: .22rem; }
+.cnode-ico svg { width: 100%; height: 100%; fill: var(--text-dim); transition: opacity 220ms var(--ease-out), fill var(--t-fast); }
+.cnode-ico__link { position: absolute; opacity: 0; }
+.cnode-field .field__box:focus-within .cnode-ico svg { fill: var(--mint-500); }
+.cnode.is-remote .cnode-ico__user { opacity: 0; }
+.cnode.is-remote .cnode-ico__link { opacity: 1; fill: var(--mint-500); }
+.cnode.is-remote .cnode-micro { opacity: 0; }
+.cnode.is-remote .cnode-ico__link { animation: cnode-link-in 320ms var(--ease-out); }
+@keyframes cnode-link-in { from { opacity: 0; transform: rotate(-24deg) scale(.7); } }
+
+/* the English line that takes the CALLSIGN slot in link mode */
+.cnode-en-alt { color: var(--mint-700); opacity: 0; transition: opacity 220ms var(--ease-out); }
+.cnode.is-remote .cnode-en-alt { opacity: 1; }
+
+/* ---- busy / notice dialog ---------------------------------------------------------------------- */
+.cnode.is-busy .cnode-split { pointer-events: none; opacity: .55; }
+.cnode-boot {
+  position: absolute;
+  inset: 0;
+  z-index: 120;
+  display: none;
+  place-items: center;
+  background: rgba(8, 10, 9, .88);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+}
+.cnode.is-busy .cnode-boot { display: grid; }
+.cnode-boot .boot__inner { display: grid; justify-items: center; gap: .18rem; }
+
+/* The dialog is in the DOM from the start and switched with the `hidden` attribute. `.cnode-dialog` sets
+   `display`, which would otherwise win over the UA's `[hidden] { display: none }` — the panel would be invisible
+   but still swallow every pointer event on the console behind it. Hence the explicit `:not([hidden])`. */
+.cnode-dialog {
+  position: absolute;
+  inset: 0;
+  z-index: 130;
+  display: none;
+  place-items: center;
+  background: rgba(6, 8, 7, .72);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+}
+.cnode-dialog:not([hidden]) { display: grid; }
+.cnode-dialog__panel {
+  --bk-c: var(--amber);
+  width: 5.2rem;
+  max-width: calc(100vw - .8rem);
+  padding: .26rem .28rem .22rem;
+  background: linear-gradient(180deg, rgba(22, 20, 15, .96), rgba(12, 12, 10, .97));
+  border: 1px solid var(--line-2);
+  box-shadow: 0 .24rem .6rem rgba(0, 0, 0, .6);
+  animation: rise-in 200ms var(--ease-out) backwards;
+}
+.cnode-dialog__head { display: flex; align-items: center; gap: .12rem; margin-bottom: .14rem; }
+.cnode-dialog__mark { width: .26rem; height: .26rem; border: 1px solid var(--amber); background: var(--amber-a20); clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
+.cnode-dialog__title { font-size: .26rem; font-weight: 700; letter-spacing: .04em; color: var(--text-hi); }
+.cnode-dialog__body { font-size: .17rem; line-height: 1.6; color: var(--text-md); white-space: pre-wrap; word-break: break-all; }
+.cnode-dialog__acts { display: flex; justify-content: flex-end; gap: .1rem; margin-top: .22rem; }
+
+/* ---- resolution / device adaptation ------------------------------------------------------------ */
+/* The shell shares the game's root scale, so a 1920×1080 window is the design size and everything else scales.
+   Below are only the cases where the fixed .cnode-login width would crowd the screen. */
+@media (max-width: 1500px), (max-height: 700px) {
+  .cnode-login { width: 5.2rem; }
+}
+@media (max-width: 1100px), (max-height: 520px) {
+  .cnode-login { width: 4.9rem; }
+  .cnode-btn { letter-spacing: .3em; padding: 0 .14rem; }
+  .cnode-btn .cnode-btn__text { padding-left: .3em; }
+}
+@media (max-width: 820px), (max-height: 400px) {
+  .cnode-login { width: 4.6rem; }
+  .cnode-btn { letter-spacing: .22em; }
+  .cnode-dialog__panel { width: 4.6rem; }
+}
+/* portrait phones keep the game's rotate hint behaviour (devices.css + js/ui/device.js) */

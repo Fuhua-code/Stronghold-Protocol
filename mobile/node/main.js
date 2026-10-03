@@ -26,7 +26,7 @@ import path from 'node:path';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { startServer, lanUrls } from '../../server/index.js';
+import { startServer, lanUrls, defaultMounts } from '../../server/index.js';
 import { APP_VERSION, PROTOCOL_VERSION } from '../../shared/constants.js';
 
 /** This file's directory (…/nodejs-project/mobile/node on Android, …/mobile/node in the repository). */
@@ -37,7 +37,7 @@ const say = (...a) => { console.log('[mobile]', ...a); };
 
 /** Parse `--key value` / `--key=value` (unknown options are ignored, the last occurrence wins). */
 function parseArgs(argv) {
-  const o = { public: null, data: null, handshake: null, host: process.env.HOST || '0.0.0.0', port: process.env.PORT ?? '0' };
+  const o = { public: null, data: null, shell: null, handshake: null, host: process.env.HOST || '0.0.0.0', port: process.env.PORT ?? '0' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const eq = a.indexOf('=');
@@ -46,6 +46,7 @@ function parseArgs(argv) {
     const val = () => (inline != null ? inline : argv[++i]);
     if (key === '--public') o.public = val();
     else if (key === '--data') o.data = val();
+    else if (key === '--shell') o.shell = val();
     else if (key === '--handshake') o.handshake = val();
     else if (key === '--host') o.host = val();
     else if (key === '--port' || key === '-p') o.port = val();
@@ -79,6 +80,21 @@ function resolvePublicDir(explicit) {
 
 /** `dir` when it holds the generated data, else null (server/data.js needs `chess.json` to be usable). */
 const isDataDir = (dir) => { try { return !!dir && fs.statSync(path.join(dir, 'chess.json')).isFile(); } catch { return false; } };
+
+/** The connect shell ships in the prepared bundle (`<root>/shell/index.html`), next to this entry, or via --shell. */
+function resolveShellDir(explicit, root) {
+  const candidates = [
+    explicit,
+    path.join(root, 'shell'),                       // the packaged bundle (assets/nodejs-project/shell)
+    path.join(HERE, '..', 'shell'),                 // running from the repository (mobile/node → mobile/shell)
+  ].filter(Boolean);
+  for (const dir of candidates) {
+    try {
+      if (fs.statSync(path.join(dir, 'index.html')).isFile()) return dir;
+    } catch { /* try the next candidate */ }
+  }
+  return null;
+}
 
 /**
  * The prepared project root: the directory that holds `server/index.js` and the generated `data/`. Found by walking
@@ -177,7 +193,17 @@ async function main() {
   say(`public=${publicDir}`);
   say(`data=${dataDir}${isDataDir(dataDir) ? '' : ' (not found: running without generated game data)'}`);
 
-  const srv = await startServer({ port: o.port, host: o.host, publicDir, dataDir, quiet: true });
+  // The APK's connect shell (local vs. remote entry) is served from its own directory at /connect/, mounted ahead
+  // of the client so every game route stays exactly as it is. `mobile/shell` ships inside the APK next to the
+  // project; without it the server just behaves as before.
+  const shellDir = resolveShellDir(o.shell, root);
+  const simDir = path.join(root, 'server', 'sim');
+  const mounts = shellDir
+    ? [{ prefix: '/connect/', name: 'shell', dir: shellDir }, ...defaultMounts({ publicDir, dataDir, sharedDir: path.join(root, 'shared'), simDir })]
+    : null;
+  if (mounts) say(`shell=/connect/  (${shellDir})`);
+
+  const srv = await startServer({ port: o.port, host: o.host, publicDir, dataDir, quiet: true, ...(mounts ? { mounts } : {}) });
 
   // Ready means it answers, not just that it listens.
   const health = await httpHealthz(srv.port);
@@ -189,6 +215,9 @@ async function main() {
     port: srv.port,
     host: srv.host,
     url: `http://127.0.0.1:${srv.port}/`,
+    // where the app should send a *local* player: the connect shell (本地/远程), or the game's own entry point
+    connectUrl: mounts ? `http://127.0.0.1:${srv.port}/connect/` : `http://127.0.0.1:${srv.port}/`,
+    hasShell: !!mounts,
     lan,
     ws,
     health: health ? health.status : 0,

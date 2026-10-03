@@ -113,7 +113,8 @@ Studio、AndroidX、Kotlin 或 NDK。
 
 差异与限制：官方 3D 棋盘不可用（贴图需要从本机《明日方舟》客户端提取，自动使用 2D 棋盘），APK 需自签名安装。
 默认只带 arm64-v8a（手机）；要在 MuMu / 雷电 / 蓝叠等 **x86_64 模拟器**上跑，用 `npm run apk:all`（多 88 MB，
-文件名带 ABI，两种包可以并存；也可用 `--abi=` 精确指定）。已在 realme RMX3820（Android 16）与
+文件名带 ABI，两种包可以并存；也可用 `--abi=` 精确指定）。手机上从本机进入会先看到**连接界面**（本地 / 远程），
+别人用局域网地址访问看到的仍是原来的默认初始界面。已在 realme RMX3820（Android 16）与
 MuMu Player（x86_64 / Android 12）上实测通过。详见 **[mobile/README.md](mobile/README.md)**。
 
 ### 系统要求

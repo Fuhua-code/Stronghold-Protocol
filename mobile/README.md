@@ -32,9 +32,10 @@ mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a-x86_64.apk   约 440 MB（npm r
 | `npm run apk` | **一键**：准备 + 构建 + 签名 + 核验，产出 APK（默认仅 arm64-v8a，手机用） |
 | `npm run apk:all` | 同上，但同时打包 **arm64-v8a + x86_64**（模拟器用，+88 MB，文件名带 ABI） |
 | `npm run apk:doctor` | 体检：主机、仓库、运行时来源、工具链、已连接手机，逐项给结论与下一步 |
-| `npm run apk:check` | 自检：**不构建**，只验证「这个克隆能不能出包」（11 项） |
+| `npm run apk:check` | 自检：**不构建**，只验证「这个克隆能不能出包」（12 项） |
 | `npm run apk:prepare` | 只准备（工具链 + Node 运行时 + 待打包目录），不打 APK |
-| `npm run apk:verify` | 构建后跑三项验证：服务器自检 → APK 解包实跑 → 无头浏览器点到休整期 |
+| `npm run apk:shell` | 用无头浏览器验证连接界面（本地 / 远程）的行为 |
+| `npm run apk:verify` | 构建后跑四项验证：服务器自检 → 连接界面 → APK 解包实跑 → 无头浏览器进对局 |
 | `adb install -r mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a.apk` | 装到手机 |
 | `adb logcat -s StrongholdProtocol` | 看应用与 Node 的日志 |
 
@@ -134,10 +135,14 @@ assets/nodejs-project/
 | 步骤 | 说明 |
 |---|---|
 | 1. 安装 | 把 APK 传到手机（数据线 / 聊天软件 / 网盘），点开安装。系统会提示「未知来源应用」，需要允许。 |
-| 2. 首次启动 | 解压约 262 MB 素材（实测约 3 秒，屏幕上有进度），随后自动启动服务器并打开游戏。以后启动秒开。 |
-| 3. 单人 | 输入代号 → 独立模拟 → 开始。 |
-| 4. 联机 | 同盟模拟 → 创建房间 → 把「同盟密钥」或「复制链接」发给朋友；朋友在同一 Wi-Fi 下打开应用或任意浏览器即可。日志与应用界面里都有手机自己的局域网地址。 |
+| 2. 首次启动 | 解压约 262 MB 素材（实测约 3 秒，屏幕上有进度），随后自动启动服务器并打开**连接界面**。以后启动秒开。 |
+| 3. 单人 | 在连接界面选「本地」（输入代号即等同选择）→ 再次点击进入游戏 → 独立模拟 → 开始。 |
+| 4. 联机 | 两种方式：**自己做主机**——选「本地」，同盟模拟 → 创建房间 → 把「同盟密钥」或链接发给朋友（`http://<手机IP>:<端口>/`，界面与日志里都有）；**加入别人的主机**——选「远程」，把对方给的链接粘进去，再次点击即由 App 打开对方的服务器（本机服务器同时停止）。 |
 | 5. 横屏 | 游戏需要横屏；应用已锁定横屏。 |
+
+**连接界面（本机初始界面）**：只有从本机（`http://127.0.0.1:<端口>/connect/`）进入才会看到它 —— 局域网
+地址进来的朋友看到的仍是**未修改的默认初始界面**。界面细节、行为与实现见
+[mobile/shell/README.md](shell/README.md)。
 
 **系统要求**：Android 7.0（API 24）或更高、**arm64-v8a（手机）或 x86_64（模拟器）**、系统 WebView 可更新。
 手机上需要约 **650 MB** 空闲空间（默认安装包 352 MB + 首次解压 262 MB）；`npm run apk:all` 的双版本包为
@@ -172,13 +177,19 @@ adb -s 127.0.0.1:5555 install -r mobile/build/Stronghold-Protocol-0.1.0-arm64-v8
 mobile/                        ← 打包器（本分支新增，其他文件与上游一致）
 ├─ build-apk.mjs               打包器主体：--prepare / --check / 默认构建
 ├─ node/main.js                移动端 Node 入口（服务器侧唯一新增文件）
+├─ shell/                      连接界面：本地 / 远程（挂载在 /connect/，见 shell/README.md）
+│  ├─ index.html               复用标题页的徽记、雷达与山脊背景、控制台外框
+│  ├─ shell.css                双按键分裂/生长/填充、链接输入态、提示框 + 分辨率适配
+│  ├─ shell.js                 状态机：本地（动态载入客户端）/ 远程（校验链接并交给 App）
+│  └─ util.js                  isLoopbackHost / normalizeLink / probeLink / Android 桥接
 ├─ android/
 │  ├─ java/io/prts/stronghold/MainActivity.java   解压素材 → 运行 Node → 轮询握手 → 打开 WebView
 │  └─ res/mipmap-*/ic_launcher.png                图标（tools/make-icons.mjs 生成）
 ├─ tools/
 │  ├─ doctor.mjs               体检（npm run apk:doctor）
 │  ├─ patch-elf-sonames.mjs    把 Termux 运行时改成 Android 合法的 lib*.so 命名并改写 ELF 的 NEEDED/SONAME
-│  ├─ check-server.mjs         在本机以移动端入口启动服务器并逐项自检
+│  ├─ check-server.mjs         在本机以移动端入口启动服务器并逐项自检（含 /connect/）
+│  ├─ check-shell.mjs          无头浏览器验证连接界面的全部交互（npm run apk:shell）
 │  ├─ check-apk.mjs            直接读 APK：逐条 CRC 校验、解包、用本机 Node 跑起来再测一遍
 │  ├─ check-client.mjs         无头 Chrome/Edge 打开真实客户端，点到「开始模拟 → 准备就绪 → 休整期」
 │  ├─ make-icons.mjs           生成图标（无依赖的 PNG 编码器）

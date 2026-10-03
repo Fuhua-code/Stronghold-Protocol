@@ -278,21 +278,32 @@ function splitUrl(url) {
 
 /**
  * Create the static request handler.
- * @param {{ publicDir: string, dataDir: string, sharedDir: string, simDir?: string, log?: object }} dirs
+ * @param {{ publicDir: string, dataDir: string, sharedDir: string, simDir?: string, log?: object,
+ *           mounts?: { prefix: string, name: string, dir: string, only?: Set<string>, deny?: Set<string> }[] }} dirs
  * @returns {(req: http.IncomingMessage, res: http.ServerResponse, rawPath: string, query: string) => Promise<void>}
  */
 /** Optional per-machine art manifest (tools/local-extract) and the empty stand-in served when it is absent. */
 const LOCAL_ART_MANIFEST = 'local-assets.json';
 const EMPTY_LOCAL_ART = Buffer.from(JSON.stringify({ version: 1, source: 'none', count: 0, groups: {} }));
 
-export function createStaticHandler({ publicDir, dataDir, sharedDir, simDir = path.join(ROOT, 'server', 'sim'), log = noopLog }) {
-  const mounts = [
+/**
+ * The static mounts of the client, in match order (first matching prefix wins, `/` last).
+ * Exported so an embedder can prepend a mount of its own — `mobile/node/main.js` serves the APK's connect shell
+ * that way, which keeps every game route byte-for-byte identical.
+ * @param {{ publicDir: string, dataDir: string, sharedDir: string, simDir: string }} dirs
+ */
+export function defaultMounts({ publicDir, dataDir, sharedDir, simDir }) {
+  return [
     { prefix: '/data/', name: 'data', dir: path.resolve(dataDir) },
     { prefix: '/shared/', name: 'shared', dir: path.resolve(sharedDir) },
     // the simulation: ES modules only (no directory listings, no other file types, no Node-only loader)
     { prefix: '/sim/', name: 'sim', dir: path.resolve(simDir), only: new Set(['.js']), deny: SIM_PRIVATE },
     { prefix: '/', name: 'public', dir: path.resolve(publicDir) },
   ];
+}
+
+export function createStaticHandler({ publicDir, dataDir, sharedDir, simDir = path.join(ROOT, 'server', 'sim'), log = noopLog, mounts: customMounts = null }) {
+  const mounts = customMounts || defaultMounts({ publicDir, dataDir, sharedDir, simDir });
   const shimBody = Buffer.from(DATA_SHIM_JS);
   const shimTag = `"shim-${shimBody.length.toString(16)}"`;
   const gzipCache = new GzipCache();
@@ -483,6 +494,7 @@ function makeLogger(quiet) {
  * @param {{
  *   port?: number, host?: string, quiet?: boolean, log?: object,
  *   publicDir?: string, dataDir?: string, sharedDir?: string,
+ *   mounts?: { prefix: string, name: string, dir: string, only?: Set<string>, deny?: Set<string> }[],
  *   MatchClass?: Function, seedFn?: () => number,
  *   lobbyGraceMs?: number, reconnectWindowMs?: number, heartbeatMs?: number, helloTimeoutMs?: number,
  *   ratePerSec?: number, rateBurst?: number, maxConnections?: number, maxRooms?: number,
@@ -516,7 +528,7 @@ export async function startServer(opts = {}) {
   }
   const lobby = new Lobby({ registry, log, MatchClass: opts.MatchClass, getData: () => data, seedFn: opts.seedFn, options: lobbyOptions });
   const network = new Network({ registry, handler: lobby, log, options: netOptions });
-  const serveStatic = createStaticHandler({ publicDir, dataDir, sharedDir, log });
+  const serveStatic = createStaticHandler({ publicDir, dataDir, sharedDir, log, mounts: opts.mounts || null });
   const startedAt = Date.now();
 
   const server = http.createServer((req, res) => {

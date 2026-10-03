@@ -510,6 +510,8 @@ async function prepareNodejsProject({ withDev, abis = [] }) {
   await copyTree(path.join(REPO, 'shared'), path.join(dest, 'shared'));
   await copyTree(path.join(REPO, 'data'), path.join(dest, 'data'));
   await copyTree(path.join(REPO, 'mobile', 'node'), path.join(dest, 'mobile', 'node'));
+  // the APK's connect shell (the 本地/远程 entry) — the mobile server mounts it at /connect/, see mobile/shell/
+  await copyTree(path.join(REPO, 'mobile', 'shell'), path.join(dest, 'shell'));
   await fsp.mkdir(path.join(dest, 'docs'), { recursive: true });
   await copyTree(path.join(REPO, 'docs', 'research'), path.join(dest, 'docs', 'research'));
 
@@ -935,7 +937,7 @@ async function verifyApk(apk, { apksigner, aapt2, abis, expectedArt, expectNode 
 
   // entries
   const { entries, size } = await readCentralDirectory(apk);
-  const need = ['classes.dex', 'resources.arsc', 'AndroidManifest.xml', 'assets/nodejs-project/mobile/node/main.js', 'assets/nodejs-project/public/index.html', 'assets/nodejs-project/data/chess.json', 'assets/nodejs-project/server/index.js', 'assets/nodejs-project/shared/constants.js'];
+  const need = ['classes.dex', 'resources.arsc', 'AndroidManifest.xml', 'assets/nodejs-project/mobile/node/main.js', 'assets/nodejs-project/public/index.html', 'assets/nodejs-project/data/chess.json', 'assets/nodejs-project/server/index.js', 'assets/nodejs-project/shared/constants.js', 'assets/nodejs-project/shell/index.html', 'assets/nodejs-project/shell/shell.js', 'assets/nodejs-project/shell/shell.css'];
   if (expectNode) {
     need.push('assets/nodejs-project/node_modules/ws/package.json', 'assets/nodejs-project/node_modules/ws/lib/websocket.js');
     // every entry point the package's own export map references must be packaged (a missing `wrapper.mjs` is
@@ -1134,6 +1136,19 @@ async function selfCheck(o) {
       need(exists(path.join(HERE, rel)), `missing mobile/${rel}`);
     }
     return 'MainActivity, launcher icons, mobile entry point';
+  });
+  check('connect shell (本地 / 远程 entry)', () => {
+    for (const rel of ['shell/index.html', 'shell/shell.css', 'shell/shell.js', 'shell/util.js', 'shell/README.md']) {
+      need(exists(path.join(HERE, rel)), `missing mobile/${rel}`);
+    }
+    const html = fs.readFileSync(path.join(HERE, 'shell', 'index.html'), 'utf8');
+    for (const needle of ['btn-local', 'btn-remote', '/connect/shell.css', '/connect/shell.js', 'type="importmap"', 'id="app"']) {
+      need(html.includes(needle), `mobile/shell/index.html is missing ${needle}`);
+    }
+    // the shell's spacing must stay inside the client's own scale, so it matches at every resolution
+    const css = fs.readFileSync(path.join(HERE, 'shell', 'shell.css'), 'utf8');
+    need(/rem/.test(css) && /@media/.test(css), 'mobile/shell/shell.css has no rem sizes / no media queries');
+    return 'index.html + shell.css + shell.js + util.js';
   });
   check('packaged runtime sources (Termux packages)', () => {
     const node = TERMUX.packages.find((p) => p.bins);

@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<!-- Same viewport contract as the game page (public/index.html): landscape, no zoom, full-bleed behind notches. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#0c0f0e" />
+<meta name="color-scheme" content="dark" />
+<meta name="format-detection" content="telephone=no" />
+<title>卫戍协议：盟约 · 连接</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' fill='%230c0f0e'/%3E%3Cpath fill='%234ed8af' d='M5 3h3v2h2V3h4v2h2V3h3v5l-2 2v7l2 2v2H5v-2l2-2v-7L5 8z'/%3E%3C/svg%3E" />
+
+<!-- Non-blocking web fonts (offline/LAN play must still start), then the game's own stylesheets, unchanged. -->
+<link rel="stylesheet" media="print" onload="this.media='all'"
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;900&family=Oxanium:wght@400;500;600;700&family=Rajdhani:wght@500;600;700&display=swap" />
+<link rel="stylesheet" href="/fonts/fonts.css" />
+<link rel="stylesheet" href="/css/theme.css" />
+<link rel="stylesheet" href="/css/components.css" />
+<link rel="stylesheet" href="/css/screens/title.css" />
+<link rel="stylesheet" href="/css/devices.css" />
+<!-- the connect shell's own additions (the 本地/远程 split, the link field, the notice) -->
+<link rel="stylesheet" href="/connect/shell.css" />
+
+<!-- The game client is ES modules with bare specifiers; the shell resolves them the same way index.html does so a
+     dynamic import of /js/main.js works from here too. -->
+<script type="importmap">
+  { "imports": { "preact": "/vendor/preact.module.js", "preact/hooks": "/vendor/hooks.module.js", "htm": "/vendor/htm.module.js" } }
+</script>
+</head>
+<body>
+<div id="connect" class="cnode">
+  <!-- backdrop: the same CSS/SVG art as the title screen (radar, ridgelines, crosses) -->
+  <div class="title-bg cnode__bg" aria-hidden="true">
+    <div class="title-bg__glow"></div>
+    <div class="title-bg__radar"><div class="title-bg__sweep"></div></div>
+    <div class="title-bg__target"></div>
+    <svg class="title-bg__ridges" viewBox="0 0 1920 420" preserveAspectRatio="none">
+      <defs>
+        <linearGradient id="cnode-ridge-far" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#16231f" /><stop offset="1" stop-color="#0a0e0d" />
+        </linearGradient>
+        <linearGradient id="cnode-ridge-near" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#0f1714" /><stop offset=".6" stop-color="#080b0a" />
+        </linearGradient>
+        <linearGradient id="cnode-ridge-edge" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="#17f9b7" stop-opacity="0" />
+          <stop offset=".3" stop-color="#17f9b7" stop-opacity=".55" />
+          <stop offset=".7" stop-color="#17f9b7" stop-opacity=".55" />
+          <stop offset="1" stop-color="#17f9b7" stop-opacity="0" />
+        </linearGradient>
+      </defs>
+      <path class="ridge ridge--far" fill="url(#cnode-ridge-far)" stroke="url(#cnode-ridge-edge)"
+        d="M0 420V250l120-40 90 30 90-70 60 20 80-70 80 55 80-25 90 70 90-20 80 50 100-15 90 25 90-55 90-55 70-55 70 45 80-20 90 65 80-20 100 55 100-20 100 40v180z" />
+      <path class="ridge ridge--near" fill="url(#cnode-ridge-near)" stroke="url(#cnode-ridge-edge)"
+        d="M0 420V322l160-32 100 20 120-50 90 40 130-20 120 50 140-30 140 35 120-35 140 20 140-50 120 30 120-20 120 40 160-20v147z" />
+    </svg>
+    <div class="title-bg__haze"></div>
+    <span class="cross" style="left:7%;top:22%"></span>
+    <span class="cross" style="left:93%;top:30%"></span>
+    <span class="cross" style="left:14%;top:70%"></span>
+    <span class="cross" style="left:88%;top:62%"></span>
+    <span class="cross" style="left:60%;top:12%"></span>
+  </div>
+
+  <div class="title-corner title-corner--tl">
+    <span class="title-corner__mark"></span>
+    <div>
+      <span class="micro micro--mint">RHODES ISLAND // SIMULATION SERVICE</span><br />
+      <span class="micro">TACTICAL CO-OP NODE · 02</span>
+    </div>
+  </div>
+  <div class="title-corner title-corner--tr">
+    <span class="micro micro--hi">TARGET POINT</span><br /><span class="micro">STRONGHOLD PROTOCOL</span>
+  </div>
+
+  <main class="title-main cnode__main">
+    <div class="emblem" aria-hidden="true">
+      <span class="emblem__bracket emblem__bracket--l"></span>
+      <svg class="emblem__svg" viewBox="-0.5 -0.5 14 15"><g id="cnode-emblem"></g></svg>
+      <span class="emblem__bracket emblem__bracket--r"></span>
+    </div>
+    <div class="title-en">
+      <span class="title-en__a">STRONGHOLD PROTOCOL</span>
+      <span class="title-en__b">ALLIANCE</span>
+    </div>
+    <h1 class="title-cn">卫戍协议<span class="title-cn__colon">：</span><em>盟约</em></h1>
+    <p class="title-tag">调配资金与干员，与同伴协同布防，抵御多波次进攻，直至击败敌方领袖。</p>
+
+    <!-- the login console: same frame as the title screen's, with the start button split in two -->
+    <div class="title-login cnode-login" id="console">
+      <label class="field field--lg cnode-field" for="cnode-input">
+        <span class="field__label">
+          <span class="cnode-label" data-cn="博士代号" data-en="链接地址">博士代号</span>
+          <span class="micro cnode-micro">CALLSIGN</span>
+        </span>
+        <span class="field__box brackets">
+          <span class="cnode-ico" aria-hidden="true">
+            <svg class="cnode-ico__user" viewBox="0 0 24 24"><path d="M12 3a4 4 0 1 1 0 8 4 4 0 0 1 0-8zM4 21a8 7 0 0 1 16 0z" /></svg>
+            <svg class="cnode-ico__link" viewBox="0 0 24 24"><path d="M9 7H6.5a5 5 0 0 0 0 10H9v-2H6.5a3 3 0 0 1 0-6H9zm6 0h2.5a5 5 0 0 1 0 10H15v-2h2.5a3 3 0 0 0 0-6H15zM8 11h8v2H8z" /></svg>
+          </span>
+          <input id="cnode-input" class="field__input" autocomplete="off" spellcheck="false" maxlength="160" />
+        </span>
+        <span class="field__hint cnode-hint" id="cnode-hint"></span>
+      </label>
+
+      <div class="cnode-split" id="split">
+        <button type="button" class="btn btn--xl cnode-btn cnode-btn--local" id="btn-local" aria-label="本地">
+          <span class="btn__label cnode-btn__text">本地</span>
+          <span class="btn__label cnode-btn__ghost" aria-hidden="true">本地</span>
+        </button>
+        <button type="button" class="btn btn--xl cnode-btn cnode-btn--remote" id="btn-remote" aria-label="远程">
+          <span class="btn__label cnode-btn__text">远程</span>
+          <span class="btn__label cnode-btn__ghost" aria-hidden="true">远程</span>
+        </button>
+      </div>
+
+      <div class="title-conn">
+        <span class="status-dot is-on"></span>
+        <span id="cnode-status">本机服务器已就绪</span>
+      </div>
+    </div>
+  </main>
+
+  <footer class="title-foot">
+    <span>非官方同人复刻 · 游戏素材版权归 上海鹰角网络 / Yostar 所有</span>
+    <span class="micro">v0.1.0 · MOBILE CONNECT</span>
+  </footer>
+
+  <!-- notice / confirm dialog in the game's own style (alert is unavailable in a WebView) -->
+  <div class="cnode-dialog" id="dialog" hidden>
+    <div class="cnode-dialog__panel brackets">
+      <div class="cnode-dialog__head">
+        <span class="cnode-dialog__mark" id="dialog-mark"></span>
+        <h2 class="cnode-dialog__title" id="dialog-title"></h2>
+      </div>
+      <p class="cnode-dialog__body" id="dialog-body"></p>
+      <div class="cnode-dialog__acts" id="dialog-acts"></div>
+    </div>
+  </div>
+
+  <div class="cnode-boot" id="boot">
+    <div class="boot__inner">
+      <div class="boot__hex"></div>
+      <div class="boot__text" id="boot-text">CONNECTING</div>
+      <div class="boot__err" id="boot-err"></div>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="/connect/shell.js"></script>
+
+<!-- The game client mounts into #app and shows #boot while it starts (public/index.html has the same two nodes).
+     They live outside .cnode because this page is replaced by the client when the player picks 本地. `display:none`
+     is inline on purpose: theme.css styles `.boot` with `display: grid`, which would beat the UA's
+     `[hidden]{display:none}` and leave a full-screen overlay swallowing every click on the console. -->
+<div id="app" style="display:none"></div>
+<div id="boot" class="boot" style="display:none" aria-hidden="true">
+  <div class="boot__hex"></div>
+  <div class="boot__text">LOADING</div>
+  <div id="boot-err" class="boot__err"></div>
+</div>
+</body>
+</html>

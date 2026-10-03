@@ -28,6 +28,7 @@ package io.prts.stronghold;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.content.res.AssetManager;
@@ -43,6 +44,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -85,15 +87,26 @@ public class MainActivity extends Activity {
 
     /** Guards against a second Activity instance trying to start a second server. */
     private static boolean sServerStarted = false;
+    /** `local` = play with this phone's server; `remote` = the app was opened to join another host. */
+    private static final String MODE_LOCAL = "local";
+    private static final String MODE_REMOTE = "remote";
+    private static String sMode = MODE_LOCAL;
+    /** The remote link the app was opened with (extends strings from other apps), or null. */
+    private static String sRemoteUrl = null;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private FrameLayout root;
     private WebView web;
+    /** The WebView showing a remote game, once the player leaves the local server. */
+    private WebView remoteWeb;
     private LinearLayout overlay;
     private TextView status;
     private TextView detail;
     private Button actionButton;
     private JSONObject handshake;
+    private Process nodeProcess;
+    /** True once the local Node server was asked to stop (remote play). */
+    private volatile boolean serverStopped = false;
 
     // -----------------------------------------------------------------------------------------------
     // activity lifecycle
@@ -103,13 +116,38 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        Log.i(TAG, "onCreate: sdk=" + Build.VERSION.SDK_INT + " abi=" + Build.SUPPORTED_ABIS[0] + " started=" + sServerStarted);
+        // A link handed to the app (`--connect <url>`, or an ACTION_VIEW intent from another app) means the player
+        // wants to join another host: the local server still starts, but only to serve the connect shell that
+        // verified and opened the link — and it stops again as soon as the remote page is up.
+        parseInvocation(getIntent());
+        Log.i(TAG, "onCreate: sdk=" + Build.VERSION.SDK_INT + " abi=" + Build.SUPPORTED_ABIS[0]
+                + " started=" + sServerStarted + " mode=" + sMode + (sRemoteUrl == null ? "" : " url=" + sRemoteUrl));
         buildUi();
         if (savedInstanceState != null && savedInstanceState.containsKey("url")) {
             loadUrl(savedInstanceState.getString("url"));
             return;
         }
         startEverything();
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        // singleTask: a second link arrives here instead of a new activity
+        parseInvocation(intent);
+        if (sRemoteUrl != null) showRemote(sRemoteUrl);
+    }
+
+    /** `--connect <url>` (the packager's own flag) or an `ACTION_VIEW` http(s) link both mean remote mode. */
+    private static void parseInvocation(Intent intent) {
+        if (intent == null) return;
+        String url = intent.getStringExtra("connect");
+        if (url == null && Intent.ACTION_VIEW.equals(intent.getAction()) && intent.getDataString() != null) {
+            url = intent.getDataString();
+        }
+        if (url == null || url.length() == 0) return;
+        sRemoteUrl = url;
+        sMode = MODE_REMOTE;
     }
 
     @Override
@@ -132,6 +170,15 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        // A remote game gets its own WebView: leaving it returns to the connect shell (this phone's entry point),
+        // which is still loaded and lets the player pick 本地 or another link.
+        if (remoteWeb != null && remoteWeb.getVisibility() == View.VISIBLE) {
+            remoteWeb.setVisibility(View.GONE);
+            remoteWeb.loadUrl("about:blank");
+            web.setVisibility(View.VISIBLE);
+            setStatus("已返回连接界面", serverStopped ? "本机服务器已停止（远程模式）" : "");
+            return;
+        }
         new AlertDialog.Builder(this)
                 .setTitle("退出游戏？")
                 .setMessage("房间和对局保存在这台手机的服务器上，退出会结束所有对局。\n\n（想让朋友继续玩就选「继续游戏」，把手机留在前台。）")
@@ -183,6 +230,10 @@ public class MainActivity extends Activity {
             }
         });
         web.setHapticFeedbackEnabled(true);
+        // The connect shell (served by the local server at /connect/) talks to the app through this bridge: it asks
+        // for the mode it was opened in, opens a verified remote link, and stops the local server when the player
+        // moves to another host.
+        web.addJavascriptInterface(new Bridge(), "SP_BRIDGE");
         root.addView(web);
 
         overlay = new LinearLayout(this);
@@ -277,8 +328,149 @@ public class MainActivity extends Activity {
                 web.setVisibility(View.VISIBLE);
                 web.loadUrl(url);
                 Log.i(TAG, "WebView loading " + url);
+                // Opened for a link (share sheet, `adb shell am start … --es connect <url>`): go straight to that
+                // host. The connect shell stays loaded underneath, so Back returns to it with a fresh choice.
+                if (MODE_REMOTE.equals(sMode) && sRemoteUrl != null) showRemote(sRemoteUrl);
             }
         });
+    }
+
+    // -----------------------------------------------------------------------------------------------
+    // the shell bridge: remote play, external links, stopping the local server
+    // -----------------------------------------------------------------------------------------------
+
+    /** Exposed to the connect shell as `window.SP_BRIDGE` (see mobile/shell/shell.js). */
+    private class Bridge {
+        /** Whether the page runs inside the app (the shell falls back to plain navigation otherwise). */
+        @JavascriptInterface
+        public boolean isApp() {
+            return true;
+        }
+
+        /** `local` or `remote`: how this activity was started. */
+        @JavascriptInterface
+        public String mode() {
+            return sMode;
+        }
+
+        /** The remote link the app was opened with, or "". */
+        @JavascriptInterface
+        public String initialUrl() {
+            return sRemoteUrl == null ? "" : sRemoteUrl;
+        }
+
+        /**
+         * Open a verified remote game in a fresh WebView with its own origin, then stop the local server: the
+         * player is a guest of that host, and nothing of ours may keep running behind it.
+         */
+        @JavascriptInterface
+        public void openRemote(final String url) {
+            Log.i(TAG, "openRemote " + url);
+            ui.post(new Runnable() {
+                @Override
+                public void run() {
+                    showRemote(url);
+                }
+            });
+            stopLocalServer();
+        }
+
+        /** Open a link in the device's own browser (used when a link could not be loaded in the app). */
+        @JavascriptInterface
+        public void openExternal(final String url) {
+            Log.i(TAG, "openExternal " + url);
+            try {
+                Intent intent = new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url));
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(intent);
+            } catch (Exception e) {
+                Log.w(TAG, "no browser for " + url, e);
+            }
+        }
+
+        /** Stop the local Node server (the shell calls this when the player leaves for another host). */
+        @JavascriptInterface
+        public void stopLocalServer() {
+            MainActivity.this.stopLocalServer();
+        }
+    }
+
+    /** Show `url` in a second, full-screen WebView (its own origin) and hide the local one. */
+    private void showRemote(final String url) {
+        if (remoteWeb == null) {
+            remoteWeb = new WebView(this);
+            remoteWeb.setBackgroundColor(BG);
+            remoteWeb.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            WebSettings s = remoteWeb.getSettings();
+            s.setJavaScriptEnabled(true);
+            s.setDomStorageEnabled(true);
+            s.setDatabaseEnabled(true);
+            s.setMediaPlaybackRequiresUserGesture(false);
+            s.setUseWideViewPort(true);
+            s.setLoadWithOverviewMode(true);
+            s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+            s.setUserAgentString("Mozilla/5.0 (Linux; Android " + Build.VERSION.RELEASE + "; " + Build.MODEL + ") AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
+            remoteWeb.setWebViewClient(new WebViewClient() {
+                @Override
+                public void onPageFinished(WebView view, String loadedUrl) {
+                    // The remote host now serves and simulates the game itself; ours has nothing left to do.
+                    stopLocalServer();
+                }
+            });
+            remoteWeb.setWebChromeClient(new WebChromeClient() {
+                @Override
+                public boolean onConsoleMessage(android.webkit.ConsoleMessage m) {
+                    Log.i(TAG, "[remote js] " + m.message());
+                    return true;
+                }
+            });
+            root.addView(remoteWeb);
+        }
+        remoteWeb.setVisibility(View.VISIBLE);
+        remoteWeb.loadUrl(url);
+        setStatus("正在连接远程主机…", url);
+        ui.post(new Runnable() {
+            @Override
+            public void run() {
+                // keep the shell behind it: if the remote page is closed, the player can pick again
+                web.setVisibility(View.GONE);
+                overlay.setVisibility(View.GONE);
+            }
+        });
+    }
+
+    /** Ask the local Node server to exit (SIGTERM), so remote play does not keep a server running behind it. */
+    private void stopLocalServer() {
+        if (serverStopped) return;
+        serverStopped = true;
+        final Process proc = nodeProcess;
+        if (proc == null) {
+            Log.i(TAG, "no local server process to stop");
+            return;
+        }
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    // Android has no signals for arbitrary processes; `kill -TERM` on our own pid does the job and
+                    // reaches the graceful path in mobile/node/main.js (rooms get room.closed).
+                    Runtime.getRuntime().exec(new String[] { "kill", "-TERM", String.valueOf(pidOf(proc)) }).waitFor();
+                } catch (Exception e) {
+                    Log.w(TAG, "cannot signal the local server: " + e.getMessage());
+                    proc.destroy();
+                }
+                Log.i(TAG, "local server asked to stop");
+            }
+        }, "sp-stop").start();
+    }
+
+    /** The pid of a spawned process (reflection: `Process.pid()` is API 24+, this app supports 24 already). */
+    private static int pidOf(Process proc) {
+        try {
+            return (int) Process.class.getMethod("pid").invoke(proc);
+        } catch (Exception e) {
+            return -1;
+        }
     }
 
     // -----------------------------------------------------------------------------------------------
@@ -394,7 +586,9 @@ public class MainActivity extends Activity {
                     || !new File(dir, "public/index.html").isFile();
             Log.i(TAG, "copy: apkChanged=" + apkChanged + " needCode=" + needCode + " needArt=" + needArt);
 
-            String[] parts = { "server", "shared", "data", "docs", "mobile", "node_modules" };
+            // `shell` carries the connect page (本地/远程); it is small and always refreshed, so it can change with
+            // a normal update without re-unpacking the art.
+            String[] parts = { "server", "shared", "data", "docs", "mobile", "node_modules", "shell" };
             if (needCode) {
                 for (String part : parts) deleteRecursively(new File(dir, part));
                 deleteRecursively(new File(dir, "package.json"));
@@ -523,6 +717,7 @@ public class MainActivity extends Activity {
             return null;
         }
         final Process running = proc;
+        nodeProcess = proc; // so `stopLocalServer()` can signal it when the player moves to a remote host
         // The server prints its banner and every `[mobile] ...` line; forward them to logcat.
         new Thread(new Runnable() {
             @Override
@@ -567,9 +762,13 @@ public class MainActivity extends Activity {
                     if (url.length() > 0) {
                         handshake = json;
                         String lan = lanList(json.optJSONArray("lan"));
-                        Log.i(TAG, "server ready on " + url + (lan.length() == 0 ? "" : "  lan=" + lan) + "  node=" + json.optString("node", "?"));
-                        setStatus("服务器已就绪，正在打开游戏…", lan.length() == 0 ? "正在加载客户端" : "局域网地址：" + lan);
-                        loadUrl(url);
+                        // The server tells us where a *local* player should land: the connect shell (本地/远程) when
+                        // it is bundled, the game's own entry point otherwise.
+                        String entry = json.optString("connectUrl", url);
+                        Log.i(TAG, "server ready on " + url + "  entry=" + entry + (lan.length() == 0 ? "" : "  lan=" + lan)
+                                + "  node=" + json.optString("node", "?"));
+                        setStatus("服务器已就绪，正在打开连接界面…", lan.length() == 0 ? "正在加载客户端" : "局域网地址：" + lan);
+                        loadUrl(entry);
                         return;
                     }
                 } catch (Exception e) {
