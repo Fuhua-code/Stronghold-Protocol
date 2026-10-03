@@ -228,8 +228,8 @@ if (findings.length === 0) {
 } else {
   for (const f of findings) console.log(c.bad(`  ✘ ${f.label} — ${f.detail}`));
 }
-console.log(c.dim('  npm run apk           构建 APK（默认 arm64-v8a，手机用）'));
-console.log(c.dim('  npm run apk:all       同时打包 arm64-v8a + x86_64（模拟器用，体积 +88 MB）'));
+console.log(c.dim('  npm run apk           构建 APK（默认 arm64-v8a，64 位手机用）'));
+console.log(c.dim('  npm run apk:all       同时打包 arm64-v8a + armeabi-v7a + x86_64（老手机与模拟器，+150 MB）'));
 console.log(c.dim('  npm run apk:prepare   只准备，不打 APK'));
 console.log(c.dim('  npm run apk:check     自检：不构建，只验证'));
 console.log(c.dim('  npm run apk:verify    构建后再跑三项验证（服务器 / APK / 浏览器）'));
