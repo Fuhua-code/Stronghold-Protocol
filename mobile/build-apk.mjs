@@ -44,7 +44,7 @@
 //   5. write the APK with a deterministic ZIP writer: everything aapt2 produced (manifest, resources.arsc,
 //      res/** — including the launcher icons), then classes.dex, the Node runtime in `lib/<abi>/` and the whole
 //      game in `assets/nodejs-project/**`, every entry stored and the native libraries 4 KB aligned;
-//   6. `zipalign` and `apksigner` (v2+v3) with `mobile/keystore/debug.keystore` (created on first use);
+//   6. `zipalign` and `apksigner` (v1+v2+v3) with `mobile/keystore/debug.keystore` (created on first use);
 //   7. verify the finished APK (signature, badging, packaged assets/native libs, manifest resource references,
 //      resource-table file references) and print a summary. Exit code 0 = a signed, verified APK.
 //
@@ -923,8 +923,13 @@ async function verifyApk(apk, { apksigner, aapt2, abis, expectedArt, expectNode 
   notes.push(`manifest resource references checked: ${refs.length ? refs.join(', ') : 'none'}`);
 
   // signature
-  const sign = run(apksigner, ['verify', '--verbose', apk], { capture: true, allowFail: true });
-  if (!/Verified using v2 scheme \(APK Signature Scheme v2\): true/.test(sign.out) && !/Verifies/.test(sign.out)) problems.push(`apksigner: ${sign.out.split('\n').slice(-6).join(' ')}`);
+  // Include API 23 in signature verification so the v1 signature is checked even though the app requires API 24.
+  const sign = run(apksigner, ['verify', '--verbose', '--min-sdk-version', '23', apk], { capture: true, allowFail: true });
+  if (!sign.ok) problems.push('apksigner: APK signature verification exited unsuccessfully');
+  for (const [scheme, label] of [['v1', 'JAR signing'], ['v2', 'APK Signature Scheme v2'], ['v3', 'APK Signature Scheme v3']]) {
+    if (!sign.out.includes(`Verified using ${scheme} scheme (${label}): true`)) problems.push(`apksigner: ${scheme} signature verification failed`);
+  }
+  notes.push('APK signatures verified: v1 + v2 + v3');
   const certs = run(apksigner, ['verify', '--print-certs', apk], { capture: true, allowFail: true });
   const signer = /Signer #1 certificate DN: (.*)/.exec(certs.out)?.[1]?.trim() || '?';
 
@@ -1386,7 +1391,7 @@ async function main() {
   await fsp.rm(apkOut, { force: true });
   run(sdk.apksigner, ['sign', '--ks', KEYSTORE, '--ks-pass', `pass:${store.password}`, '--key-pass', `pass:${store.password}`,
     '--ks-key-alias', store.alias, '--min-sdk-version', TOOLS.minSdk,
-    '--v1-signing-enabled', 'false', '--v2-signing-enabled', 'true', '--v3-signing-enabled', 'true',
+    '--v1-signing-enabled', 'true', '--v2-signing-enabled', 'true', '--v3-signing-enabled', 'true',
     '--out', apkOut, aligned], { env });
   await fsp.rm(aligned, { force: true });
   ok(`signed: ${path.relative(REPO, apkOut)}`);

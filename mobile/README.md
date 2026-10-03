@@ -11,7 +11,7 @@ npm run apk
 （取决于网速）；之后重跑只需十几秒到一分钟。产物：
 
 ```
-mobile/build/Stronghold-Protocol-0.1.1-arm64-v8a.apk     约 352 MB，v2+v3 已签名（默认：手机）
+mobile/build/Stronghold-Protocol-0.1.1-arm64-v8a.apk     约 353 MB，v1+v2+v3 已签名（默认：手机）
 mobile/build/Stronghold-Protocol-0.1.1-arm64-v8a-x86_64.apk   约 440 MB（npm run apk:all：手机 + 模拟器）
 ```
 
@@ -93,7 +93,7 @@ npm run apk
    ├─ 6. 打包             自写 ZIP 打包器：aapt2 的产物 + classes.dex + lib/<abi>/** + assets/**
    │                     全部未压缩存储，lib/**.so 4 字节对齐
    │
-   ├─ 7. 签名             zipalign → apksigner（v2+v3，密钥 mobile/keystore/debug.keystore，首次自动生成）
+   ├─ 7. 签名             zipalign → apksigner（v1+v2+v3，密钥 mobile/keystore/debug.keystore，首次自动生成）
    │
    └─ 8. 核验             apksigner verify · aapt2 dump badging/xmltree · 清单里每个 @type/name 都在资源表内
                           · 资源表引用的 res/** 都真的在 APK 里 · 每个 ABI 都带齐 node+9 个库 · 素材齐全
