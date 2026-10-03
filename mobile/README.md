@@ -31,7 +31,7 @@ Google AOSP 镜像）上跑，加 `npm run apk:all`。
 |---|---|
 | `npm run apk` | **一键**：准备 + 构建 + 签名 + 核验，产出 APK（默认仅 arm64-v8a，64 位手机用） |
 | `npm run apk:all` | 同上，但同时打包 **arm64-v8a + armeabi-v7a + x86_64**（32 位老手机 + 模拟器，+150 MB） |
-| `npm run apk:doctor` | 体检：主机、仓库、运行时来源、工具链、已连接手机，逐项给结论与下一步 |
+| `npm run apk:doctor` | 体检：主机、仓库、运行时来源、工具链、已连接手机（含**应用分身里残留的旧副本**检测），逐项给结论与下一步 |
 | `npm run apk:check` | 自检：**不构建**，只验证「这个克隆能不能出包」（11 项） |
 | `npm run apk:prepare` | 只准备（工具链 + Node 运行时 + 待打包目录），不打 APK |
 | `npm run apk:verify` | 构建后跑三项验证：服务器自检 → APK 解包实跑 → 无头浏览器点到休整期 |
@@ -280,8 +280,8 @@ lib/x86_64/: libnode.so libc++_shared.so libcrypto.so libssl.so libicuuc.so libi
 | `npm run apk` 报缺少素材 | 首次运行会自动下载；若被网络中断，`--no-fetch-assets` 也可出包（用占位图），或手动 `node tools/fetch-assets.mjs` 续传。 |
 | 报 `xz is not available` | 解包 Termux 包需要 `xz`；Windows 10+ 自带 `tar`，`xz` 可用 `winget install xz` / `scoop install xz` 安装。 |
 | 报 `no JDK 17+ found` 且无法下载 | 用 `--toolchain=<目录>` 指向已有 JDK/SDK，或设置 `JAVA_HOME`。 |
-| 安装时报「签名不一致 / 已安装签名冲突的应用」**但原应用已卸载** | 三种原因，按顺序排查：① **拷进手机时只拷了 APK**：旧版本会在 APK 旁边生成 `<apk>.idsig`（v4 签名）文件，Android 11+ 的安装器看到它就要求配套文件，缺失时报签名错误。**现在打包器已关闭 v4 签名，并在每次构建后清掉旧 `.idsig`**（`npm run apk:doctor` 也会提示）——用新包即可；② **应用分身 / 多用户**：分身在另一个用户（通常是 `999`）里也持有一份，主用户卸载它仍在，用 `adb shell pm list packages --user 999 io.prts.stronghold` 查、`adb shell pm uninstall --user 999 io.prts.stronghold` 删；③ **第三方安全软件的「应用锁/净化」**残留了同包名条目，先在安全中心里解除。 |
-| 安装时报「应用未安装」且无更多信息 | 空间不足（安装包 352 MB / 多架构包 511 MB，另需 262 MB 解压空间）或下载/传输过程中被截断；重新完整拷贝一次，必要时 `adb install -r <apk>` 让它给出具体错误码。 |
+| 安装报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`（「已安装签名冲突的应用」）**但主用户里已卸载** | **绝大多数情况是「应用分身」**：分身会在另一个 Android 用户里保留自己的一份副本，主用户卸载删不掉它，下一次安装就会与那份旧签名冲突。真机实测（realme RMX3820）：`io.prts.stronghold` 残留在 `10:system_clone` 里，`pm path` 在主用户下是空的，所以「检查已删除」查不出来。**一条命令解决**（`npm run apk:doctor` 会直接把设备和用户号列出来）：<br>`adb shell pm list packages -u \| grep prts` 找出所有用户<br>`adb shell pm uninstall --user <用户号> io.prts.stronghold`<br>然后在手机上「设置 → 应用分身 / 双开」里也删掉该分身。其他可能：① 小米「手机分身」/ 三星「Dual Messenger」/ 华为「应用分身」同理；② 第三方安全软件的「净化 / 应用锁」残留同包名条目；③ 拷进手机时只拷了 APK 而旧包旁边留着 `<apk>.idsig`（v4 签名，Android 11+ 会要求配套文件）——**打包器现在已关闭 v4 签名并自动清理 `.idsig`**，用新包即可。 |
+| 安装时报「应用未安装」且无更多信息 | 空间不足（安装包 352 MB / 多架构包 511 MB，另需 262 MB 解压空间）或传输过程中被截断；重新完整拷贝一次，必要时用 `adb install -r <apk>` 让它给出具体错误码。 |
 | 卡在「正在解压美术与音频…」 | 正常，约 4000 个文件 / 262 MB；确认手机剩余空间 ≥ 650 MB（默认 352 MB 安装包 + 262 MB 解压；多架构包为 511 MB）。 |
 | 卡在「正在启动本机服务器…」后显示错误页 | `adb logcat -s StrongholdProtocol` 看 Node 报错；多为素材解压不完整 →「设置 → 应用 → 清除数据」后重开。 |
 | 「Node 运行时缺失」 | ① APK 用 `--no-node` 构建的客户端壳 → 用默认参数重建；② 设备 ABI 不在包里（错误信息会列出包内 ABI 与本机 ABI）：**32 位 arm 手机**用 `npm run apk:all`（或 `--abi=armeabi-v7a`），**模拟器**用 `npm run apk:all`（或 `--abi=x86_64`）。 |

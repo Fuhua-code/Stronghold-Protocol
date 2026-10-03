@@ -24,6 +24,8 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..', '..');
 const BUILD = path.join(REPO, 'mobile', 'build');
+/** Must match APP.package in build-apk.mjs (the doctor stays standalone, so it is repeated here). */
+const APP_ID = 'io.prts.stronghold';
 
 // ---------------------------------------------------------------------------------------------------
 // helpers (kept local so the doctor never depends on the packager's internals)
@@ -207,6 +209,34 @@ section('5. 安卓设备（可选）/ device');
       const [serial, state, ...rest] = row.split(/\s+/);
       const model = /model:(\S+)/.exec(rest.join(' '))?.[1] || '';
       line(state === 'device' ? 'ok' : 'warn', `设备 ${serial} ${model}`, state === 'device' ? '已授权' : `${state}（在手机上允许 USB 调试）`);
+    }
+    // Is the app already installed — under *any* user profile? An app clone (realme「应用分身」/ Xiaomi「双开」/ Samsung
+    // 「Dual Messenger」) keeps its own copy in another Android user (system_clone = 10, MultiApp = 999, …). Uninstalling
+    // in the main profile leaves that copy behind, and the next install then fails with
+    // INSTALL_FAILED_UPDATE_INCOMPATIBLE ("signatures do not match") even though the app is "deleted". This is the
+    // single most common install failure for this APK, so it is checked for every authorized device.
+    for (const row of rows) {
+      const [serial, state] = row.split(/\s+/);
+      if (state !== 'device') continue;
+      const users = run(adb, ['-s', serial, 'shell', 'pm', 'list', 'users']);
+      const ids = [...users.out.matchAll(/UserInfo\{(\d+):([^:}]*)/g)].map((m) => ({ id: m[1], name: m[2] }));
+      const holders = [];
+      for (const u of ids) {
+        const r = run(adb, ['-s', serial, 'shell', 'pm', 'list', 'packages', '--user', u.id, APP_ID]);
+        if (r.out.includes(`package:${APP_ID}`)) holders.push(`${u.id}:${u.name}`);
+      }
+      if (!holders.length) {
+        line('ok', `${serial} 上的 ${APP_ID}`, ids.length > 1 ? `未安装（设备有 ${ids.length} 个用户空间）` : '未安装');
+      } else {
+        const clone = holders.filter((h) => !h.startsWith('0:'));
+        line(clone.length ? 'warn' : 'ok', `${serial} 上的 ${APP_ID}`,
+          `已安装在 ${holders.join(', ')}`);
+        if (clone.length) {
+          const cmds = clone.map((h) => `adb -s ${serial} shell pm uninstall --user ${h.split(':')[0]} ${APP_ID}`);
+          line('warn', '应用分身里有旧副本 → 会导致「签名不一致」安装失败',
+            `主用户里卸载它是删不掉的，先执行：${cmds.join('  &&  ')}`);
+        }
+      }
     }
     const apk = fs.existsSync(path.join(BUILD))
       ? fs.readdirSync(path.join(BUILD))
