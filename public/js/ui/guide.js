@@ -67,6 +67,7 @@ function preload(url) {
   if (!url || typeof Image === 'undefined') return;
   const img = new Image();
   img.decoding = 'async';
+  img.crossOrigin = 'anonymous';
   img.src = url;
 }
 

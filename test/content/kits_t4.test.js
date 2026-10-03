@@ -109,7 +109,9 @@ test('莫斯提马 S3: ripple hits every enemy in range, ATK +90 %, knock-back; 
   assert.ok(h.runUntil(() => u.skill.active, 10));
   approx(u.s.atk, u.base.atk * (1 + bb.atk), 1e-6);
   h.run(0.3);
-  approx(es[0].findBuff(`mostma:slow:${u.id}`).mods.moveMul, 1 + t1.move_speed * bb.talent_scale, 1e-9, 'slow ×3');
+  const slowBuff = es[0].findBuff(`mostma:slow:${u.id}`);
+  approx(slowBuff.mods.moveMul, 1 + t1.move_speed * bb.talent_scale, 1e-9, 'slow ×3');
+  assert.equal(slowBuff.status, 'slow', 'carries the slow status so the client draws its icon');
   const x0 = es.map((e) => e.x);
   const n0 = dmgBy(h, u).length;
   h.run(u.s.interval + 0.1);
@@ -371,7 +373,7 @@ test('阿罗玛: first attack ×1.1 + 2.5 s levitation; S2: +ATK and landing dam
   assert.ok(noisy(h, 'statusApplied').some((c) => c.target === e && c.status === 'levitate' && c.duration === t0.levitate_duration));
   // a second enemy: skill on before it is bubbled → landing damage
   assert.ok(u.skill.activate('test', { free: true }));
-  const e2 = h.spawn('enemy_dummy', { pos: [10, 7] }); // splashed by the next attack on the first dummy
+  const e2 = h.spawn('enemy_dummy', { pos: [10, 7] }); // on her line: struck by the next attack too (轰击术师)
   approx(u.s.atk, u.base.atk * (1 + bb.atk), 1e-9);
   h.runUntil(() => dmgBy(h, u, (c) => c.dmg?.tags?.includes('landing')).length >= 1, 15);
   const land = dmgBy(h, u, (c) => c.dmg?.tags?.includes('landing'));
@@ -1067,7 +1069,7 @@ test('瑰盐 S2 only defers damage taken by operators (summons take it in full)'
   assert.equal(noisy(h, 'damaged').filter((c) => c.target === tok && c.dmg?.tags?.includes('hpLoss')).length, 0);
 });
 
-test('卡涅利安 S2: every enemy hit by the AoE attack is slowed (splash victims too)', () => {
+test('卡涅利安 S2: every enemy hit by the group attack is slowed', () => {
   const id = 'chess_char_4_24_a', bb = D(id).skill.bb;
   const h = makeBattle({ defs: { enemies: { enemy_dummy: dummy() } }, units: [{ chessId: id, row: 10, col: 5 }], timeLimit: 60, hooks: ['statusApplied'] });
   h.step();
