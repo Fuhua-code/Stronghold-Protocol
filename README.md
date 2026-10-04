@@ -2,7 +2,7 @@
 
 《明日方舟》季节性自走棋塔防玩法「卫戍协议：盟约」的**非官方同人复刻**：浏览器即开即玩，单人或 1–4 人联机合作。
 
-![version](https://img.shields.io/badge/version-0.1.0-2ea44f)
+![version](https://img.shields.io/badge/version-0.1.1-2ea44f)
 ![license](https://img.shields.io/badge/code%20license-GPL--3.0--or--later-blue)
 ![node](https://img.shields.io/badge/node-22%20%7C%2024-339933)
 
@@ -37,7 +37,7 @@ English summary: [below](#english).
 
 - **独立模拟**（单人）与**同盟模拟**（1–4 人**合作**，没有 PvP；空位可以加 AI 队友）。
 - 服务器是一个 Node.js 程序，**战斗在各玩家的浏览器里模拟**（和官方一样），服务器只管经济与回合，一台低功耗小主机就能开服。
-- 这是第一个公开版本（0.1.0）。仍有少数规则按推断实现，与官方不一致的地方欢迎在 Issue 里反馈。
+- 当前版本 0.1.1：修复了首个公开版本（0.1.0）发布后玩家反馈的问题，详见 [CHANGELOG.md](CHANGELOG.md)。仍有少数规则按推断实现，与官方不一致的地方欢迎在 Issue 里反馈。
 
 ## 功能一览
 
@@ -68,7 +68,7 @@ English summary: [below](#english).
    - Windows：在 PowerShell 里运行 `winget install OpenJS.NodeJS.LTS`，或到 <https://nodejs.org/zh-cn/download> 下载安装包。
    - macOS：`brew install node@22`，或到官网下载安装包。
    - Linux：发行版的包管理器、nvm 或 fnm。
-2. **下载**：在 [Releases](../../releases/latest) 页面下载 v0.1.0 的整合包（zip），解压到一个路径较短的文件夹（Windows 上建议不要放在 OneDrive 同步的目录里）。
+2. **下载**：在 [Releases](../../releases/latest) 页面下载最新版本（v0.1.1）的整合包（zip），解压到一个路径较短的文件夹（Windows 上建议不要放在 OneDrive 同步的目录里）。
 3. **启动**
    - Windows：双击 **`scripts\start-windows.bat`**。如果弹出「安全警告」，点「运行」；Windows 防火墙弹窗请勾选「专用网络」并允许。
    - macOS / Linux：在解压出的文件夹里运行 `./scripts/start.sh`（或 `bash scripts/start.sh`）。
@@ -89,32 +89,6 @@ npm start          # 启动服务器：http://localhost:3000
 - **官方 3D 棋盘**需要从本机的《明日方舟》PC 客户端提取贴图（Windows 原生客户端、macOS 的 CrossOver 或 PlayCover）。`npm run setup` 检测到客户端时会询问是否提取（需要 Python 3.8+，依赖装在项目内的 `.venv-extract`，不影响系统）；之后可以用 `node tools/setup.mjs --local` 重新提取，或用 `--game "<…/StreamingAssets/AB/Windows>"` 指定路径。没有客户端时自动使用 2D 棋盘，其他功能不受影响。
 - 素材下载优先使用 GitHub，失败时自动改用 jsDelivr 镜像。
 - `npm run doctor`（即 `node tools/doctor.mjs`）可以随时诊断：Node 版本、素材是否完整、端口占用、局域网地址和防火墙。
-
-### 方式三：安卓 APK（手机独立运行）· `mobile-termux` 分支
-
-`mobile-termux` 分支带一个安卓打包器：把服务器、客户端、全部素材和 **Node 24 运行时（Termux 封装）** 一起打成
-一个**独立可玩的 APK**（不需要电脑、不需要联网），手机自己就是服务器，同一 Wi-Fi 的朋友用应用里的地址或房间
-链接即可联机。
-
-```bash
-npm run apk          # 一键：准备 + 构建 + 签名 + 核验（默认只打 arm64-v8a，手机用）
-                     # → mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a.apk（约 352 MB）
-npm run apk:all      # 同时打 arm64-v8a + x86_64，手机与模拟器通吃
-                     # → mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a-x86_64.apk（约 440 MB）
-
-npm run apk:doctor   # 体检：主机 / 仓库 / 运行时来源 / 工具链 / 已连接手机
-npm run apk:check    # 自检：不构建，只验证这个克隆能不能出包
-npm run apk:verify   # 构建后跑三项验证（服务器自检、APK 解包实跑、无头浏览器进对局）
-```
-
-首次运行会自己准备一切：依赖与素材、Android 工具链（JDK 21 / build-tools 36 / platform android-34，约
-1.5 GB，装在仓库外的 `.toolchain/`）、以及 Termux 仓库的 Node 24.18.0 与其依赖库。不需要 Gradle、Android
-Studio、AndroidX、Kotlin 或 NDK。
-
-差异与限制：官方 3D 棋盘不可用（贴图需要从本机《明日方舟》客户端提取，自动使用 2D 棋盘），APK 需自签名安装。
-默认只带 arm64-v8a（手机）；要在 MuMu / 雷电 / 蓝叠等 **x86_64 模拟器**上跑，用 `npm run apk:all`（多 88 MB，
-文件名带 ABI，两种包可以并存；也可用 `--abi=` 精确指定）。已在 realme RMX3820（Android 16）与
-MuMu Player（x86_64 / Android 12）上实测通过。详见 **[mobile/README.md](mobile/README.md)**。
 
 ### 系统要求
 
@@ -143,6 +117,14 @@ MuMu Player（x86_64 / Android 12）上实测通过。详见 **[mobile/README.md
 设置方式：macOS / Linux `PORT=8080 npm start`；PowerShell `$env:PORT=8080; npm start`；cmd `set "PORT=8080" && npm start`。健康检查：`GET /healthz`。
 
 ### 和朋友一起玩（局域网）
+
+通过 `localhost` 或 loopback 地址打开时，初始页提供“本地 / 远程”两个入口：输入博士代号或先选“本地”，
+再点击“本地”进入原有游戏流程；先选“远程”，输入游戏服务的 HTTP/HTTPS 地址，再点击“远程”连接。
+普通文本、非游戏网页及 loopback 远程目标会被拒绝。需要网页或证书验证时，由用户在浏览器中确认。
+局域网地址或公网域名直接打开时，继续显示原始“开始”入口。
+
+本机进入大厅后，“加入同盟”右侧的“远程指南”显示当前服务的实际局域网地址，并说明局域网直连和公网穿透方式。
+地址用于连接游戏服务器，同盟密钥用于加入该服务器内的房间。
 
 1. 打开页面 → 输入昵称 → **同盟模拟** → 创建房间。房主选择难度，可以添加 / 移除 AI 队友。
 2. 把 4 位字母的**同盟密钥**，或「复制链接」得到的 `http://<地址>:3000/?room=密钥` 发给朋友。
@@ -190,6 +172,7 @@ MuMu Player（x86_64 / Android 12）上实测通过。详见 **[mobile/README.md
 
 | 文档 | 内容 |
 |---|---|
+| [CHANGELOG.md](CHANGELOG.md) | 更新记录：每个版本修复了什么、哪些反馈经核实不是问题 |
 | [docs/PLAYING.md](docs/PLAYING.md) | 玩法指南：流程、经济、招募与晋升、摆阵、联防、盟约、最终攻势、结算称号 |
 | [docs/DEPLOY.md](docs/DEPLOY.md) | 部署指南：Windows 开服与开机自启、防火墙、组网 / 隧道、反向代理与 HTTPS、Docker、systemd、排错 |
 | [docs/DESIGN.md](docs/DESIGN.md) | 架构与契约（英文）：技术栈、目录分工、网络协议、渲染与 UI、各次试玩后的规则修订 |
@@ -204,7 +187,7 @@ MuMu Player（x86_64 / Android 12）上实测通过。详见 **[mobile/README.md
 
 ```bash
 npm run dev                 # node --watch：改动服务器代码后自动重启
-node --test                 # 单元 + 集成测试（约 2880 项；缺少素材 / 浏览器的用例会自动跳过）
+node --test                 # 单元 + 集成测试（约 3170 项；缺少素材 / 浏览器的用例会自动跳过）
 SP_E2E=1 node --test test/ui/mock.e2e.test.js        # 浏览器端到端测试，需要本机 Chrome（CHROME_PATH 可指定路径）
 SP_REAL_E2E=1 node --test test/ui/real.e2e.test.js   # 需要 Chrome + 已下载的素材
 RENDER_E2E=1 node --test 'test/render/*.browser.test.js'   # 渲染测试，部分需要本地提取的棋盘贴图
@@ -225,7 +208,6 @@ RENDER_E2E=1 node --test 'test/render/*.browser.test.js'   # 渲染测试，部�
 | `scripts/` | 启动脚本（Windows / macOS / Linux）、Windows 开机自启 |
 | `docs/` | 文档与调研 |
 | `test/` | `node:test` 测试 |
-| `mobile/` | **仅 `mobile-termux` 分支**：安卓打包器（`npm run apk` 一键出 APK）与移动端入口 |
 
 ## 许可证
 
