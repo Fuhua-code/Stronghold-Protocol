@@ -44,7 +44,7 @@
 //   5. write the APK with a deterministic ZIP writer: everything aapt2 produced (manifest, resources.arsc,
 //      res/** — including the launcher icons), then classes.dex, the Node runtime in `lib/<abi>/` and the whole
 //      game in `assets/nodejs-project/**`, every entry stored and the native libraries 4 KB aligned;
-//   6. `zipalign` and `apksigner` (v2+v3) with `mobile/keystore/debug.keystore` (created on first use);
+//   6. `zipalign` and `apksigner` (v1+v2+v3) with a local signing key (created on first use);
 //   7. verify the finished APK (signature, badging, packaged assets/native libs, manifest resource references,
 //      resource-table file references) and print a summary. Exit code 0 = a signed, verified APK.
 //
@@ -66,34 +66,43 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { patchRuntimeDir } from './tools/patch-elf-sonames.mjs';
+import {
+  assertContainedPath,
+  findPackageRecord,
+  hasPinnedValidSignature,
+  normalizeSha256,
+  parseDebianPackages,
+  parseInReleaseChecksums,
+  requireHttpsUrl,
+} from './tools/package-security.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..');
 const BUILD = path.join(HERE, 'build');
 const ANDROID = path.join(HERE, 'android');
 const KEYSTORE_DIR = path.join(HERE, 'keystore');
-const KEYSTORE = path.join(KEYSTORE_DIR, 'debug.keystore');
-
-const NODEJS_MOBILE = { version: '18.20.4' }; // historical: the previous nodejs-mobile-based build (see mobile/README.md)
+const KEYSTORE = process.env.SP_KEYSTORE ? path.resolve(process.env.SP_KEYSTORE) : path.join(KEYSTORE_DIR, 'local.keystore');
+const SIGNING_CONFIG = process.env.SP_KEYSTORE_CONFIG ? path.resolve(process.env.SP_KEYSTORE_CONFIG) : path.join(KEYSTORE_DIR, 'local.properties');
+const TERMUX_KEY = path.join(HERE, 'keys', 'termux-autobuilds.gpg');
+const TERMUX_FINGERPRINT = 'CC72CF8BA7DBFA0182877D045A897D96E57CF20C';
 
 /** The Node runtime the APK ships: Termux's Node 24 build, per architecture (packages.termux.dev). */
 const TERMUX = {
   base: process.env.SP_TERMUX_MIRROR || 'https://packages.termux.dev/apt/termux-main',
   // package name → [path under pool/ (with `<arch>` for the architecture), files copied into lib/<abi>/]
   packages: [
-    { pkg: 'nodejs-lts', file: 'pool/main/n/nodejs-lts/nodejs-lts_24.18.0-1_<arch>.deb', bins: { 'bin/node': 'node' } },
-    { pkg: 'libc++', file: 'pool/main/libc/libc++/libc++_30_<arch>.deb', libs: { 'lib/libc++_shared.so': 'libc++_shared.so' } },
-    { pkg: 'openssl', file: 'pool/main/o/openssl/openssl_1%3A3.6.5_<arch>.deb', libs: { 'lib/libcrypto.so.3': 'libcrypto.so.3', 'lib/libssl.so.3': 'libssl.so.3' } },
-    { pkg: 'libicu', file: 'pool/main/libi/libicu/libicu_78.3_<arch>.deb', libs: { 'lib/libicuuc.so.78.3': 'libicuuc.so.78', 'lib/libicui18n.so.78.3': 'libicui18n.so.78', 'lib/libicudata.so.78.3': 'libicudata.so.78' } },
-    { pkg: 'c-ares', file: 'pool/main/c/c-ares/c-ares_1.34.8_<arch>.deb', libs: { 'lib/libcares.so': 'libcares.so' } },
-    { pkg: 'libsqlite', file: 'pool/main/libs/libsqlite/libsqlite_3.53.4_<arch>.deb', libs: { 'lib/libsqlite3.so.3.53.4': 'libsqlite3.so' } },
-    { pkg: 'zlib', file: 'pool/main/z/zlib/zlib_1.3.2_<arch>.deb', libs: { 'lib/libz.so.1.3.2': 'libz.so.1' } },
+    { pkg: 'nodejs-lts', bins: { 'bin/node': 'node' } },
+    { pkg: 'libc++', libraries: ['libc++_shared.so'] },
+    { pkg: 'openssl', libraries: ['libcrypto.so', 'libssl.so'] },
+    { pkg: 'libicu', libraries: ['libicuuc.so', 'libicui18n.so', 'libicudata.so'] },
+    { pkg: 'c-ares', libraries: ['libcares.so'] },
+    { pkg: 'libsqlite', libraries: ['libsqlite3.so'] },
+    { pkg: 'zlib', libraries: ['libz.so'] },
   ],
 };
 
 /** Versions of the toolchain this build was tested with (overridable through the environment). */
 const TOOLS = {
-  cmdlineTools: process.env.SP_CMDLINE_TOOLS || 'commandlinetools-win-11076708_latest.zip',
   // 34.0.0's d8 (R8 8.2) crashes on anonymous classes and lambdas ("Cannot invoke String.length()"), which the
   // activity needs; 35+ dexes them correctly. Both parse the same resources and produce a valid APK.
   buildTools: process.env.SP_BUILD_TOOLS || '36.0.0',
@@ -125,7 +134,7 @@ const ALL_ABIS = ['arm64-v8a', 'x86_64'];
 const RUNTIME_LIBS = ['libc++_shared.so', 'libcares.so', 'libsqlite3.so', 'libcrypto.so', 'libssl.so', 'libicuuc.so', 'libicui18n.so', 'libicudata.so', 'libz.so'];
 
 const APP = {
-  package: 'io.prts.stronghold',
+  package: 'io.github.fuhuacode.stronghold',
   label: '卫戍协议：盟约',
   versionName: null, // from package.json
   versionCode: 3,
@@ -167,41 +176,184 @@ function run(cmd, args, { cwd = REPO, env, capture = false, allowFail = false, i
   return { ok: r.status === 0, status: r.status, out };
 }
 
-async function download(url, dest, { expectMinBytes = 1024 } = {}) {
+async function fetchHttps(url, { timeoutMs = 120000 } = {}) {
+  let current = requireHttpsUrl(url);
+  for (let redirects = 0; redirects <= 5; redirects++) {
+    const res = await fetch(current, { redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) });
+    if ([301, 302, 303, 307, 308].includes(res.status)) {
+      const location = res.headers.get('location');
+      if (!location) fail('HTTPS redirect has no location: ' + current);
+      current = requireHttpsUrl(new URL(location, current).href);
+      continue;
+    }
+    if (!res.ok) fail('download failed: HTTP ' + res.status + ' for ' + current);
+    return res;
+  }
+  fail('too many HTTPS redirects: ' + url);
+}
+
+function sha256(data) {
+  return crypto.createHash('sha256').update(data).digest('hex');
+}
+
+async function download(url, dest, { expectMinBytes = 1024, expectedBytes = null, sha256: expectedHash } = {}) {
+  const digest = normalizeSha256(expectedHash);
   await fsp.mkdir(path.dirname(dest), { recursive: true });
-  if (exists(dest) && (await fsp.stat(dest)).size >= expectMinBytes) return dest;
+  if (exists(dest)) {
+    const cached = await fsp.readFile(dest);
+    if (cached.length >= expectMinBytes && (expectedBytes == null || cached.length === expectedBytes) && sha256(cached) === digest) return dest;
+    await fsp.rm(dest, { force: true });
+  }
   const tmp = `${dest}.part`;
   log(`  ↓ ${url}`);
-  const res = await fetch(url, { redirect: 'follow' });
-  if (!res.ok) fail(`download failed: HTTP ${res.status} for ${url}`);
+  const res = await fetchHttps(url);
   const total = Number(res.headers.get('content-length') || 0);
   const out = fs.createWriteStream(tmp);
+  const hash = crypto.createHash('sha256');
   let seen = 0; let lastPct = -5;
   const reader = res.body.getReader();
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
     seen += value.length;
+    hash.update(value);
     if (total) { const pct = Math.floor((seen / total) * 100); if (pct >= lastPct + 5) { lastPct = pct; process.stdout.write(`\r    ${pct}% (${bytes(seen)}/${bytes(total)})   `); } }
     if (!out.write(Buffer.from(value))) await new Promise((r) => out.once('drain', r));
   }
   await new Promise((resolve, reject) => { out.end((e) => (e ? reject(e) : resolve())); });
   if (total) process.stdout.write('\r');
-  const size = (await fsp.stat(tmp)).size;
-  if (size < expectMinBytes) fail(`download too small (${size} bytes): ${url}`);
+  const size = seen;
+  if (size < expectMinBytes || (expectedBytes != null && size !== expectedBytes)) {
+    await fsp.rm(tmp, { force: true });
+    fail('download size mismatch (' + size + ' bytes): ' + url);
+  }
+  if (hash.digest('hex') !== digest) {
+    await fsp.rm(tmp, { force: true });
+    fail('SHA-256 mismatch: ' + url);
+  }
   await fsp.rename(tmp, dest);
   return dest;
 }
 
 async function unzip(zipPath, destDir) {
+  await fsp.rm(destDir, { recursive: true, force: true });
   await fsp.mkdir(destDir, { recursive: true });
-  // tar (bsdtar, shipped with Windows 10+ and every Unix) handles ZIP and keeps the forward-slash layout intact.
-  const r = run('tar', ['-xf', zipPath, '-C', destDir], { capture: true, allowFail: true });
-  if (!r.ok) {
-    // fallback: PowerShell's Expand-Archive
-    const ps = run('powershell', ['-NoProfile', '-Command', `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${destDir}' -Force`], { capture: true, allowFail: true });
-    if (!ps.ok) fail(`cannot extract ${zipPath}: ${r.out || ps.out}`);
+  const { entries } = await readCentralDirectory(zipPath);
+  const fh = await fsp.open(zipPath, 'r');
+  let total = 0;
+  try {
+    for (const [name, entry] of entries) {
+      entry.name = name;
+      const dest = assertContainedPath(destDir, name);
+      if (!dest || name.endsWith('/')) {
+        if (dest) await fsp.mkdir(dest, { recursive: true });
+        continue;
+      }
+      const mode = entry.externalAttributes >>> 16;
+      if (entry.unixMode && (mode & 0o170000) === 0o120000) throw new Error('symbolic link rejected in toolchain archive: ' + name);
+      const data = await readEntry({ fh }, entry);
+      total += data.length;
+      if (total > 2 * 1024 * 1024 * 1024) throw new Error('toolchain archive exceeds the 2 GiB extraction limit');
+      await fsp.mkdir(path.dirname(dest), { recursive: true });
+      await fsp.writeFile(dest, data);
+      if (entry.unixMode && process.platform !== 'win32') await fsp.chmod(dest, mode & 0o777);
+    }
+  } finally {
+    await fh.close();
   }
+}
+
+function findSystemTool(name) {
+  const override = process.env['SP_' + name.toUpperCase().replaceAll('-', '_')];
+  const candidates = [];
+  if (override) candidates.push(override);
+  if (process.platform === 'win32') {
+    candidates.push(path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Git', 'usr', 'bin', name + '.exe'));
+    candidates.push(path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Git', 'usr', 'bin', name));
+  }
+  const suffixes = process.platform === 'win32' ? ['.exe', '.cmd', '.bat', ''] : [''];
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+    for (const suffix of suffixes) candidates.push(path.join(dir, name + suffix));
+  }
+  return candidates.find((candidate) => candidate && exists(candidate)) || null;
+}
+
+function pathForGitGpg(file, gpgv) {
+  if (process.platform !== 'win32' || !gpgv.toLowerCase().includes('git\\usr\\bin\\gpgv')) return file;
+  const cygpath = path.join(path.dirname(gpgv), 'cygpath.exe');
+  const converted = spawnSync(cygpath, ['-u', path.resolve(file)], { encoding: 'utf8', windowsHide: true });
+  if (converted.status !== 0) fail('cygpath failed while preparing Termux signature verification');
+  return converted.stdout.trim();
+}
+
+async function loadTermuxPackages(arch, allowDownload) {
+  const base = requireHttpsUrl(TERMUX.base);
+  const baseUrl = base.href.endsWith('/') ? base.href : base.href + '/';
+  const cacheDir = path.join(BUILD, 'termux', 'repository');
+  await fsp.mkdir(cacheDir, { recursive: true });
+  const releaseFile = path.join(cacheDir, 'InRelease');
+  if (allowDownload) {
+    const response = await fetchHttps(new URL('dists/stable/InRelease', baseUrl).href);
+    await fsp.writeFile(releaseFile, Buffer.from(await response.arrayBuffer()));
+  } else if (!exists(releaseFile)) {
+    fail('Termux InRelease cache is missing; remove --no-download to fetch and verify it');
+  }
+
+  const gpgv = findSystemTool('gpgv');
+  if (!gpgv) fail('GPG is required to verify the Termux package index (install GnuPG or set SP_GPGV)');
+  const keyFile = pathForGitGpg(TERMUX_KEY, gpgv);
+  const signedFile = pathForGitGpg(releaseFile, gpgv);
+  const result = spawnSync(gpgv, ['--status-fd', '1', '--keyring', keyFile, signedFile], {
+    encoding: 'utf8',
+    windowsHide: true,
+    maxBuffer: 4 << 20,
+  });
+  const signatureStatus = String(result.stdout || '') + String(result.stderr || '');
+  if (result.status !== 0 || !hasPinnedValidSignature(signatureStatus, TERMUX_FINGERPRINT)) {
+    fail('Termux InRelease signature is invalid or is not signed by the pinned official key');
+  }
+
+  const releaseText = await fsp.readFile(releaseFile, 'utf8');
+  const checksums = parseInReleaseChecksums(releaseText);
+  const indexNames = [
+    'main/binary-' + arch + '/Packages.xz',
+    'main/binary-' + arch + '/Packages.bz2',
+    'main/binary-' + arch + '/Packages.gz',
+    'main/binary-' + arch + '/Packages',
+  ];
+  const indexName = indexNames.find((name) => checksums.has(name));
+  if (!indexName) fail('signed Termux InRelease has no package index for ' + arch);
+  const indexInfo = checksums.get(indexName);
+  const indexFile = assertContainedPath(cacheDir, 'indexes/' + indexName);
+  if (allowDownload) {
+    await download(new URL('dists/stable/' + indexName, baseUrl).href, indexFile, {
+      expectMinBytes: 1024,
+      expectedBytes: indexInfo.size,
+      sha256: indexInfo.sha256,
+    });
+  } else {
+    if (!exists(indexFile)) fail('Termux package index cache is missing; remove --no-download to fetch it');
+    const cached = await fsp.readFile(indexFile);
+    if (cached.length !== indexInfo.size || sha256(cached) !== indexInfo.sha256) {
+      fail('cached Termux package index failed the signed SHA-256 check');
+    }
+  }
+
+  let packagesText;
+  if (indexName.endsWith('.xz')) {
+    const unpacked = spawnSync('xz', ['-dc', indexFile], { encoding: 'buffer', windowsHide: true, maxBuffer: 128 << 20 });
+    if (unpacked.status !== 0) fail('cannot decompress the verified Termux package index: ' + unpacked.stderr);
+    packagesText = unpacked.stdout.toString('utf8');
+  } else if (indexName.endsWith('.gz')) {
+    packagesText = zlib.gunzipSync(await fsp.readFile(indexFile)).toString('utf8');
+  } else if (indexName.endsWith('.bz2')) {
+    const unpacked = spawnSync(findSystemTool('bzip2') || 'bzip2', ['-dc', indexFile], { encoding: 'buffer', windowsHide: true, maxBuffer: 128 << 20 });
+    if (unpacked.status !== 0) fail('cannot decompress the verified Termux package index: ' + unpacked.stderr);
+    packagesText = unpacked.stdout.toString('utf8');
+  } else {
+    packagesText = await fsp.readFile(indexFile, 'utf8');
+  }
+  return parseDebianPackages(packagesText);
 }
 
 async function dirSize(dir) {
@@ -263,7 +415,10 @@ function findJavaHome(toolchain) {
   const cands = [];
   if (process.env.JAVA_HOME) cands.push(process.env.JAVA_HOME);
   const jdkRoot = path.join(toolchain, 'jdk');
-  if (exists(jdkRoot)) for (const d of fs.readdirSync(jdkRoot)) cands.push(path.join(jdkRoot, d));
+  if (exists(jdkRoot)) {
+    cands.push(jdkRoot);
+    for (const d of fs.readdirSync(jdkRoot)) cands.push(path.join(jdkRoot, d));
+  }
   for (const d of ['C:\\Program Files\\Eclipse Adoptium', 'C:\\Program Files\\Java', 'C:\\Program Files\\Microsoft\\jdk', 'C:\\Program Files\\Zulu', '/usr/lib/jvm']) {
     if (exists(d)) for (const s of fs.readdirSync(d)) cands.push(path.join(d, s));
   }
@@ -277,27 +432,15 @@ function findJavaHome(toolchain) {
   return null;
 }
 
-async function ensureJdk(toolchain, allowDownload) {
+async function ensureJdk(toolchain) {
   const found = findJavaHome(toolchain);
   if (found) { ok(`JDK ${found.version} at ${found.home}`); return found.home; }
-  if (!allowDownload) fail('no JDK 17+ found (set JAVA_HOME or --toolchain=<dir>)');
-  step('1b', 'downloading a portable JDK 21 …');
-  const api = 'https://api.adoptium.net/v3/assets/latest/21/hotspot?architecture=x64&image_type=jdk&os=windows&vendor=eclipse';
-  const meta = await (await fetch(api)).json();
-  const pkg = meta?.[0]?.binary?.package;
-  if (!pkg?.link) fail('cannot resolve a JDK download from api.adoptium.net');
-  const zip = await download(pkg.link, path.join(toolchain, 'downloads', 'jdk21.zip'), { expectMinBytes: 50 << 20 });
-  await unzip(zip, path.join(toolchain, 'jdk'));
-  const jdkDirs = fs.readdirSync(path.join(toolchain, 'jdk')).map((d) => path.join(toolchain, 'jdk', d));
-  const javaBin = (d) => path.join(d, 'bin', process.platform === 'win32' ? 'javac.exe' : 'javac');
-  const home = jdkDirs.find((d) => exists(javaBin(d)));
-  if (!home) fail(`the JDK archive did not contain a JDK (looked in ${path.join(toolchain, 'jdk')})`);
-  ok(`JDK installed at ${home}`);
-  return home;
+  fail('JDK 17 or newer is required; install a JDK and set JAVA_HOME');
 }
 
 /** The Android SDK root (…/android-sdk) with build-tools/<v>, platforms/<p> and the command-line tools. */
-async function ensureSdk(toolchain, javaHome, allowDownload) {
+/* Legacy SDK auto-download implementation removed: SDK/JDK must be provisioned locally. */
+async function ensureSdkLegacy(toolchain, javaHome, allowDownload) {
   const sdk = path.join(toolchain, 'android-sdk');
   const sdkmanager = path.join(sdk, 'cmdline-tools', 'latest', 'bin', process.platform === 'win32' ? 'sdkmanager.bat' : 'sdkmanager');
   const env = {
@@ -309,7 +452,7 @@ async function ensureSdk(toolchain, javaHome, allowDownload) {
   if (!exists(sdkmanager)) {
     if (!allowDownload) fail(`Android SDK command-line tools not found at ${sdkmanager}`);
     step('1c', 'downloading Android SDK command-line tools …');
-    const zip = await download(`https://dl.google.com/android/repository/${TOOLS.cmdlineTools}`, path.join(toolchain, 'downloads', 'cmdline-tools.zip'), { expectMinBytes: 20 << 20 });
+    fail('Android command-line tools are not downloaded by the packager; install the SDK locally');
     const tmp = path.join(sdk, '.unpack');
     await unzip(zip, tmp);
     const src = path.join(tmp, 'cmdline-tools');
@@ -345,6 +488,36 @@ async function ensureSdk(toolchain, javaHome, allowDownload) {
   return { sdk, bt, env, aapt2: exe('aapt2'), d8: exe('d8'), zipalign: exe('zipalign'), apksigner: exe('apksigner'), androidJar: path.join(sdk, 'platforms', TOOLS.platform, 'android.jar') };
 }
 
+async function ensureSdk(toolchain, javaHome) {
+  const candidates = [
+    process.env.ANDROID_SDK_ROOT,
+    process.env.ANDROID_HOME,
+    path.join(toolchain, 'android-sdk'),
+    process.platform === 'win32' ? path.join(os.homedir(), 'AppData', 'Local', 'Android', 'Sdk')
+      : process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Android', 'sdk')
+        : path.join(os.homedir(), 'Android', 'Sdk'),
+  ].filter(Boolean);
+  const sdk = candidates.find((candidate) => exists(path.join(candidate, 'build-tools', TOOLS.buildTools))
+    && exists(path.join(candidate, 'platforms', TOOLS.platform, 'android.jar')));
+  if (!sdk) fail('Android SDK is missing build-tools ' + TOOLS.buildTools + ' or ' + TOOLS.platform
+    + '; install them with Android Studio SDK Manager and set ANDROID_SDK_ROOT');
+  const bt = path.join(sdk, 'build-tools', TOOLS.buildTools);
+  const isWin = process.platform === 'win32';
+  const exeName = (name) => (isWin ? (name === 'aapt2' || name === 'zipalign' ? name + '.exe' : name + '.bat') : name);
+  const exe = (name) => path.join(bt, exeName(name));
+  for (const name of ['aapt2', 'd8', 'zipalign', 'apksigner']) {
+    if (!exists(exe(name))) fail('missing ' + name + ' in ' + bt);
+  }
+  const env = {
+    JAVA_HOME: javaHome,
+    ANDROID_HOME: sdk,
+    ANDROID_SDK_ROOT: sdk,
+    PATH: path.join(javaHome, 'bin') + path.delimiter + process.env.PATH,
+  };
+  ok('Android SDK ' + TOOLS.buildTools + ' / ' + TOOLS.platform + ' at ' + sdk);
+  return { sdk, bt, env, aapt2: exe('aapt2'), d8: exe('d8'), zipalign: exe('zipalign'), apksigner: exe('apksigner'), androidJar: path.join(sdk, 'platforms', TOOLS.platform, 'android.jar') };
+}
+
 /**
  * Extract selected members out of a `.deb` (an `ar` archive holding `data.tar.xz`).
  *
@@ -370,9 +543,10 @@ async function extractDeb(deb, destDir) {
   let payloadName = '';
   while (p + 60 <= buf.length) {
     const name = buf.subarray(p, p + 16).toString('ascii').trim().replace(/\/$/, '');
-    const size = parseInt(buf.subarray(p + 48, p + 58).toString('ascii').trim(), 10);
+    const sizeText = buf.subarray(p + 48, p + 58).toString('ascii').trim();
+    const size = Number(sizeText);
     const start = p + 60;
-    if (!Number.isFinite(size) || size < 0) break;
+    if (!Number.isSafeInteger(size) || size < 0 || start + size > buf.length) fail(`${deb}: malformed ar member`);
     if (name.startsWith('data.tar')) { payload = buf.subarray(start, start + size); payloadName = name; }
     p = start + size + (size % 2);
   }
@@ -400,13 +574,15 @@ async function extractDeb(deb, destDir) {
     const header = tar.subarray(off, off + 512);
     if (header.every((b) => b === 0)) break;
     const raw = header.subarray(0, 100).toString('utf8').replace(/\0.*$/, '');
-    const prefix = header.subarray(345, 500).toString('utf8').replace(/\0.*$/, '');
-    const full = (prefix ? `${prefix}/${raw}` : raw).replace(/^\.\//, '');
-    const size = parseInt(header.subarray(124, 136).toString('ascii').replace(/\0.*$/, '').trim(), 8) || 0;
+  const prefix = header.subarray(345, 500).toString('utf8').replace(/\0.*$/, '');
+    const full = safeTarMemberName(prefix ? `${prefix}/${raw}` : raw);
+    const sizeText = header.subarray(124, 136).toString('ascii').replace(/\0.*$/, '').trim();
+    const size = sizeText ? parseInt(sizeText, 8) : 0;
     const type = String.fromCharCode(header[156] || 0x30);
     const dataStart = off + 512;
+    if (!Number.isSafeInteger(size) || size < 0 || dataStart + size > tar.length) fail(`${deb}: malformed tar member size`);
     if ((type === '0' || type === '\0') && full && !full.endsWith('/')) {
-      const dest = path.join(destDir, ...full.split('/'));
+      const dest = assertContainedPath(destDir, full);
       await fsp.mkdir(path.dirname(dest), { recursive: true });
       await fsp.writeFile(dest, tar.subarray(dataStart, dataStart + size));
       out.push(full);
@@ -416,6 +592,17 @@ async function extractDeb(deb, destDir) {
   fs.rmSync(xzPath, { force: true });
   fs.rmSync(dataTar, { force: true });
   return out;
+}
+
+function safeTarMemberName(value) {
+  const name = String(value || '').replace(/^\.\//, '');
+  if (!name || name === '.') return '';
+  if (name.includes('\0') || name.includes('\\') || name.startsWith('/') || name.includes(':')) {
+    fail('unsafe tar member path: ' + value);
+  }
+  const parts = name.split('/');
+  if (parts.some((part) => part === '..' || part === '.')) fail('tar path traversal rejected: ' + value);
+  return name;
 }
 
 /**
@@ -452,7 +639,8 @@ async function unpackDeb(deb, destDir) {
  *
  * @returns {Promise<{ bin: string, libs: string[], node: string }>} paths inside `mobile/build/runtime/<abi>`
  */
-async function fetchTermuxNode(toolchain, abi, allowDownload) {
+/* Legacy unsigned Termux fetcher retained only for historical source compatibility; it is never called. */
+async function fetchTermuxNodeLegacyUnused(toolchain, abi, allowDownload) {
   const arch = ABI_TERMUX[abi];
   if (!arch) fail(`unsupported ABI ${abi}: Termux publishes aarch64 and x86_64 only (use --abi=arm64-v8a or --abi=x86_64)`);
   const destDir = path.join(BUILD, 'runtime', abi);
@@ -470,30 +658,135 @@ async function fetchTermuxNode(toolchain, abi, allowDownload) {
   const libs = [];
   let nodeVersion = null;
   for (const p of TERMUX.packages) {
-    const file = p.file.replace('<arch>', arch);
     const deb = path.join(work, `${p.pkg}.deb`);
-    if (!exists(deb)) {
-      if (!allowDownload) fail(`missing ${deb} and downloads are disabled`);
-      await download(`${TERMUX.base}/${file}`, deb, { expectMinBytes: 4000 });
-    }
+    if (!exists(deb) && !allowDownload) fail(`missing ${deb} and downloads are disabled`);
     const out = path.join(work, p.pkg);
     await fsp.rm(out, { recursive: true, force: true });
     await fsp.mkdir(out, { recursive: true });
     const members = await extractDeb(deb, out);
     if (!members.length) fail(`${p.pkg}: the package has no regular files`);
     const usr = path.join(out, 'data', 'data', 'com.termux', 'files', 'usr');
-    const wanted = { ...(p.bins || {}), ...(p.libs || {}) };
+    const wanted = { ...(p.bins || {}) };
     const missing = Object.keys(wanted).filter((rel) => !exists(path.join(usr, ...rel.split('/'))));
     if (missing.length) fail(`${p.pkg} (${arch}): ${missing.join(', ')} not found in the package (${members.length} files unpacked)`);
     for (const [from, to] of Object.entries(wanted)) {
       await fsp.copyFile(path.join(usr, ...from.split('/')), path.join(destDir, to));
-      if (p.libs) libs.push(to);
+      if (p.libraries) libs.push(to);
     }
-    if (p.bins) nodeVersion = /nodejs-lts_(\d+\.\d+\.\d+)/.exec(p.file)?.[1] || '24.x';
+    if (p.bins) nodeVersion = p.version?.match(/(?:^|:)(\d+\.\d+\.\d+)/)?.[1] || '24.x';
   }
   await fsp.writeFile(stamp, JSON.stringify({ abi, arch, node: nodeVersion, packages: TERMUX.packages.map((p) => p.pkg), libs, fetchedAt: new Date().toISOString() }, null, 1) + '\n');
   ok(`${abi}: Node ${nodeVersion} + ${libs.length} shared libraries (${bytes((await dirSize(destDir)).bytes)})`);
   return { bin: path.join(destDir, 'node'), libs, node: nodeVersion };
+}
+
+async function fetchTermuxNode(toolchain, abi, allowDownload) {
+  const arch = ABI_TERMUX[abi];
+  if (!arch) fail('unsupported ABI: ' + abi);
+  const descriptors = await loadTermuxPackages(arch, allowDownload);
+  const packages = TERMUX.packages.map((pkg) => ({
+    ...pkg,
+    ...findPackageRecord(descriptors, pkg.pkg, arch),
+  }));
+  const packageState = packages.map(({ pkg, version, filename, sha256: digest, size }) => ({
+    pkg, version, filename, sha256: digest, size,
+  }));
+  const destDir = path.join(BUILD, 'runtime', abi);
+  const stamp = path.join(destDir, 'RUNTIME.json');
+  if (exists(stamp) && exists(path.join(destDir, 'node'))) {
+    try {
+      const info = JSON.parse(await fsp.readFile(stamp, 'utf8'));
+      const libsPresent = Array.isArray(info.libs) && info.libs.every((name) => exists(path.join(destDir, name)));
+      if (JSON.stringify(info.packages) === JSON.stringify(packageState) && libsPresent) {
+        ok(abi + ': verified runtime cache for Node ' + info.node);
+        return { bin: path.join(destDir, 'node'), libs: info.libs, node: info.node };
+      }
+    } catch { /* rebuild incomplete or stale runtime cache */ }
+  }
+  await fsp.rm(destDir, { recursive: true, force: true });
+  await fsp.mkdir(destDir, { recursive: true });
+  const work = path.join(BUILD, 'termux', arch);
+  await fsp.mkdir(work, { recursive: true });
+  const licenseRoot = path.join(BUILD, 'licenses', 'termux');
+  await fsp.mkdir(licenseRoot, { recursive: true });
+
+  const libs = [];
+  let nodeVersion = null;
+  for (const pkg of packages) {
+    const deb = path.join(work, pkg.pkg + '.deb');
+    const debUrl = new URL(pkg.filename, TERMUX.base.endsWith('/') ? TERMUX.base : TERMUX.base + '/').href;
+    if (!allowDownload && !exists(deb)) fail('missing verified Termux package cache: ' + deb);
+    await download(debUrl, deb, {
+      expectMinBytes: 4000,
+      expectedBytes: Number.isFinite(pkg.size) ? pkg.size : null,
+      sha256: pkg.sha256,
+    });
+    const out = path.join(work, pkg.pkg);
+    await fsp.rm(out, { recursive: true, force: true });
+    await fsp.mkdir(out, { recursive: true });
+    const members = await extractDeb(deb, out);
+    if (!members.length) fail(pkg.pkg + ': package has no regular files');
+    const usr = path.join(out, 'data', 'data', 'com.termux', 'files', 'usr');
+    for (const [from, to] of Object.entries(pkg.bins || {})) {
+      const src = path.join(usr, ...from.split('/'));
+      if (!exists(src)) fail(pkg.pkg + ' is missing ' + from + ' for ' + arch);
+      await fsp.copyFile(src, path.join(destDir, to));
+    }
+    if (pkg.libraries) {
+      const libDir = path.join(usr, 'lib');
+      const files = await fsp.readdir(libDir);
+      for (const prefix of pkg.libraries) {
+        const names = files.filter((name) => name === prefix || name.startsWith(prefix + '.'));
+        if (!names.length) fail(pkg.pkg + ' has no library matching ' + prefix + ' for ' + arch);
+        for (const name of names) {
+          const target = path.join(destDir, name);
+          await fsp.copyFile(path.join(libDir, name), target);
+          libs.push(name);
+        }
+      }
+    }
+    await copyPackageLicenses(usr, pkg, path.join(licenseRoot, pkg.pkg));
+    if (pkg.bins) {
+      const match = /(?:^|:)(\d+\.\d+\.\d+)/.exec(pkg.version);
+      if (!match) fail('cannot determine Node version from signed package index: ' + pkg.version);
+      nodeVersion = match[1];
+    }
+  }
+  await fsp.writeFile(stamp, JSON.stringify({
+    abi, arch, node: nodeVersion, packages: packageState, libs, fetchedAt: new Date().toISOString(),
+  }, null, 1) + '\n');
+  ok(abi + ': Node ' + nodeVersion + ' + ' + libs.length + ' verified shared libraries');
+  return { bin: path.join(destDir, 'node'), libs, node: nodeVersion };
+}
+
+async function copyPackageLicenses(usr, pkg, destDir) {
+  await fsp.mkdir(destDir, { recursive: true });
+  const roots = ['share/doc', 'share/licenses'].map((rel) => path.join(usr, rel)).filter(exists);
+  const copied = [];
+  const walk = async (dir, relative = '') => {
+    for (const entry of await fsp.readdir(dir, { withFileTypes: true })) {
+      const rel = path.posix.join(relative, entry.name);
+      const abs = path.join(dir, entry.name);
+      if (entry.isDirectory()) await walk(abs, rel);
+      else if (entry.isFile() && /^(copyright|license(?:[._-].*)?|licence(?:[._-].*)?|notice(?:[._-].*)?)$/i.test(entry.name)) {
+        const data = await fsp.readFile(abs);
+        if (!data.length || /^404 Not Found\s*$/.test(data.toString('utf8'))) continue;
+        const out = path.join(destDir, ...rel.split('/'));
+        await fsp.mkdir(path.dirname(out), { recursive: true });
+        await fsp.writeFile(out, data);
+        copied.push(rel);
+      }
+    }
+  };
+  for (const root of roots) await walk(root);
+  const metadata = [
+    'Package: ' + pkg.pkg,
+    'Version: ' + pkg.version,
+    'SPDX license metadata: ' + (pkg.license || 'see bundled package copyright files'),
+    'Files: ' + (copied.length ? copied.join(', ') : 'no separate copyright file in the Termux package'),
+    '',
+  ].join('\n');
+  await fsp.writeFile(path.join(destDir, 'PACKAGE.txt'), metadata);
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -509,6 +802,11 @@ async function prepareNodejsProject({ withDev, abis = [] }) {
   await copyTree(path.join(REPO, 'server'), path.join(dest, 'server'));
   await copyTree(path.join(REPO, 'shared'), path.join(dest, 'shared'));
   await copyTree(path.join(REPO, 'data'), path.join(dest, 'data'));
+  for (const name of ['LICENSE', 'NOTICE.md', 'THIRD-PARTY-NOTICES.md']) {
+    await fsp.copyFile(path.join(REPO, name), path.join(dest, name));
+  }
+  const licenseSource = path.join(BUILD, 'licenses', 'termux');
+  if (exists(licenseSource)) await copyTree(licenseSource, path.join(dest, 'THIRD-PARTY-LICENSES', 'Termux'));
   await copyTree(path.join(REPO, 'mobile', 'node'), path.join(dest, 'mobile', 'node'));
   await fsp.mkdir(path.join(dest, 'docs'), { recursive: true });
   await copyTree(path.join(REPO, 'docs', 'research'), path.join(dest, 'docs', 'research'));
@@ -641,7 +939,7 @@ async function writeAndroidProject({ abis, versionName, packageName }) {
         android:roundIcon="@mipmap/ic_launcher"
         android:theme="@style/SPTheme"
         android:hardwareAccelerated="true"
-        android:usesCleartextTraffic="true"
+    android:usesCleartextTraffic="true"
         android:extractNativeLibs="true"
         android:allowBackup="false"
         android:requestLegacyExternalStorage="false"
@@ -669,7 +967,10 @@ async function writeAndroidProject({ abis, versionName, packageName }) {
 
   // Java sources + resources shipped with the mobile project (MainActivity, mipmaps, …)
   await copyTree(path.join(ANDROID, 'res'), path.join(gen, 'res'));
-  await copyTree(path.join(ANDROID, 'java'), path.join(gen, 'src'));
+  const activity = await fsp.readFile(path.join(ANDROID, 'java', 'io', 'prts', 'stronghold', 'MainActivity.java'), 'utf8');
+  const packageDir = path.join(gen, 'src', ...packageName.split('.'));
+  await fsp.mkdir(packageDir, { recursive: true });
+  await fsp.writeFile(path.join(packageDir, 'MainActivity.java'), activity.replace('package io.prts.stronghold;', 'package ' + packageName + ';'));
 
   // the assets tree (nodejs-project) at the root of assets/
   await copyTree(path.join(BUILD, 'nodejs-project'), path.join(gen, 'assets', 'nodejs-project'));
@@ -869,7 +1170,12 @@ async function readCentralDirectory(src) {
         if (id === 0x0001) { localOffset = Number(extra.readBigUInt64LE(4)); break; }
         extra = extra.subarray(4 + len);
       }
-      entries.set(name, { method, crc, compressedSize, uncompressedSize, stored: method === 0, localOffset });
+      const externalAttributes = cd.readUInt32LE(p + 38);
+      const creatorHost = cd.readUInt16LE(p + 4) >>> 8;
+      entries.set(name, {
+        method, crc, compressedSize, uncompressedSize, stored: method === 0, localOffset,
+        externalAttributes, unixMode: creatorHost === 3 ? externalAttributes >>> 16 : 0,
+      });
       p += 46 + nameLen + extraLen + commentLen;
     }
     if (entries.size !== count) throw new Error(`central directory truncated (${entries.size}/${count})`);
@@ -917,20 +1223,15 @@ async function verifyApk(apk, { apksigner, aapt2, abis, expectedArt, expectNode 
 
   // signature
   const sign = run(apksigner, ['verify', '--verbose', apk], { capture: true, allowFail: true });
-  // V1 is intentionally a compatibility signature: modern Android (API 24+) chooses V2/V3 and reports
-  // V1=false in its default verification range even when the JAR signature is present. Verify it with
-  // an API 21 range separately; the manifest still keeps minSdk 24.
-  const legacySign = run(apksigner, ['verify', '--verbose', '--min-sdk-version', '21', apk], { capture: true, allowFail: true });
-  for (const [scheme, verified] of [
-    ['v1', /Verified using v1 scheme \(JAR signing\): true/],
-    ['v2', /Verified using v2 scheme \(APK Signature Scheme v2\): true/],
-    ['v3', /Verified using v3 scheme \(APK Signature Scheme v3\): true/],
-  ]) {
-    const output = scheme === 'v1' ? legacySign.out : sign.out;
-    if (!verified.test(output)) {
-      problems.push(`APK is missing ${scheme} signature verification: ${sign.out.split('\n').slice(-8).join(' ')}`);
-    }
-  }
+  const legacySign = run(apksigner, ['verify', '--verbose', '--min-sdk-version', '23', apk], { capture: true, allowFail: true });
+  const signaturePatterns = {
+    1: /Verified using v1 scheme \((?:JAR signing|APK Signature Scheme v1)\): true/,
+    2: /Verified using v2 scheme \(APK Signature Scheme v2\): true/,
+    3: /Verified using v3 scheme \(APK Signature Scheme v3\): true/,
+  };
+  if (!signaturePatterns[1].test(legacySign.out)) problems.push('apksigner v1 verification failed');
+  for (const scheme of [2, 3]) if (!signaturePatterns[scheme].test(sign.out)) problems.push(`apksigner v${scheme} verification failed`);
+  if (!/Verifies/.test(sign.out)) problems.push(`apksigner: ${sign.out.split('\n').slice(-6).join(' ')}`);
   const certs = run(apksigner, ['verify', '--print-certs', apk], { capture: true, allowFail: true });
   const signer = /Signer #1 certificate DN: (.*)/.exec(certs.out)?.[1]?.trim() || '?';
 
@@ -1047,7 +1348,9 @@ async function ensureRepositoryReady(o) {
     if (!exists(path.join(REPO, rel))) missing.push(what);
   }
   if (missing.length && !o.download) fail(`missing ${missing.join(', ')} — run \`npm install\` first (or drop --no-download)`);
-  if (missing.length) {
+  if (missing.length) fail('missing ' + missing.join(', ') + '; prepare dependencies before running the packager');
+  /* dependency installation is intentionally explicit; the packager never executes npm */
+  if (false) {
     step('0', `preparing the repository (${missing.join(', ')} missing)`);
     const r = run('npm', ['install', '--no-audit', '--no-fund'], { env: { npm_config_loglevel: 'warn' }, allowFail: true });
     if (!r.ok) fail('`npm install` failed — run it by hand to see the error');
@@ -1065,9 +1368,7 @@ async function ensureRepositoryReady(o) {
     return;
   }
   step('0b', haveArt ? 'refreshing the game art' : 'downloading the game art (~250 MB, resumable)');
-  const r = run(process.execPath, [path.join(REPO, 'tools', 'fetch-assets.mjs')], { allowFail: true });
-  if (!r.ok || !exists(assets)) warn('the art download did not finish: the APK will use placeholder visuals (re-run to resume)');
-  else ok('game art ready');
+  fail('public/assets is missing or refresh was requested; run node tools/fetch-assets.mjs before packaging');
 }
 
 function help() {
@@ -1143,7 +1444,7 @@ async function selfCheck(o) {
     return `${urls.length} files`;
   });
   check('Android resources and activity', () => {
-    for (const rel of ['android/java/io/prts/stronghold/MainActivity.java', 'android/res/mipmap-mdpi/ic_launcher.png', 'android/res/mipmap-xxxhdpi/ic_launcher.png', 'tools/make-icons.mjs', 'node/main.js']) {
+    for (const rel of ['android/java/io/prts/stronghold/MainActivity.java', 'android/res/mipmap-mdpi/ic_launcher.png', 'android/res/mipmap-xxxhdpi/ic_launcher.png', 'tools/make-icons.mjs', 'node/main.js', 'keys/termux-autobuilds.gpg']) {
       need(exists(path.join(HERE, rel)), `missing mobile/${rel}`);
     }
     return 'MainActivity, launcher icons, mobile entry point';
@@ -1151,12 +1452,12 @@ async function selfCheck(o) {
   check('packaged runtime sources (Termux packages)', () => {
     const node = TERMUX.packages.find((p) => p.bins);
     need(!!node, 'no Node package configured');
-    const libs = TERMUX.packages.flatMap((p) => Object.values(p.libs || {}));
-    for (const want of ['libc++_shared.so', 'libcrypto.so.3', 'libssl.so.3', 'libicudata.so.78', 'libcares.so', 'libsqlite3.so', 'libz.so.1']) {
+    const libs = TERMUX.packages.flatMap((p) => p.libraries || []);
+    for (const want of ['libc++_shared.so', 'libcrypto.so', 'libssl.so', 'libicudata.so', 'libcares.so', 'libsqlite3.so', 'libz.so']) {
       need(libs.includes(want), `runtime library ${want} is not configured`);
     }
     for (const abi of DEFAULT_ABIS) need(!!ABI_TERMUX[abi], `no Termux architecture for ${abi}`);
-    return `${node.pkg} + ${libs.length} libraries for ${DEFAULT_ABIS.join(' + ')} from ${TERMUX.base.replace(/^https?:\/\//, '')}`;
+    return `${node.pkg} + ${libs.length} libraries for ${DEFAULT_ABIS.join(' + ')} from signed ${TERMUX.base.replace(/^https?:\/\//, '')}`;
   });
   check('Android SDK toolchain', () => {
     if (!o.download) return 'skipped (--no-download)';
@@ -1231,8 +1532,8 @@ async function main() {
 
   // 1. toolchain
   step('1b', 'resolving the Android toolchain');
-  const javaHome = await ensureJdk(toolchain, o.download);
-  const sdk = await ensureSdk(toolchain, javaHome, o.download);
+  const javaHome = await ensureJdk(toolchain);
+  const sdk = await ensureSdk(toolchain, javaHome);
   const env = { ...sdk.env, JAVA_HOME: javaHome };
   const javaBin = (n) => path.join(javaHome, 'bin', process.platform === 'win32' ? `${n}.exe` : n);
   ok(`aapt2 ${TOOLS.buildTools}, ${TOOLS.platform}, javac at ${javaHome}`);
@@ -1276,6 +1577,7 @@ async function main() {
 
   // 5. resources
   step('5', 'aapt2 compile + link');
+  await fsp.rm(path.join(BUILD, 'gen'), { recursive: true, force: true });
   const resZip = path.join(BUILD, 'res.zip');
   run(sdk.aapt2, ['compile', '--dir', path.join(gen, 'res'), '-o', resZip], { env });
   const unsigned = path.join(BUILD, 'app-unsigned.apk');
@@ -1313,7 +1615,10 @@ async function main() {
     if (exists(path.join(BUILD, 'gen'))) await walkJava(path.join(BUILD, 'gen'));
     if (!javaFiles.length) fail('no Java sources to compile');
     const classDir = path.join(BUILD, 'classes');
+    await fsp.rm(classDir, { recursive: true, force: true });
+    await fsp.rm(dexDir, { recursive: true, force: true });
     await fsp.mkdir(classDir, { recursive: true });
+    await fsp.mkdir(dexDir, { recursive: true });
     // Compile against Android, not the JDK: `-source`/`-target` 8 keeps d8 happy (it desugars), and the boot
     // classpath is android.jar plus build-tools' core-lambda-stubs.jar (lambdas on Android target java.lang.invoke,
     // which android.jar does not declare). Verified with JDK 21 + build-tools 34.
@@ -1428,9 +1733,18 @@ async function main() {
 }
 
 async function ensureKeystore(javaHome) {
-  const password = 'android';
-  const alias = 'androiddebugkey';
+  const alias = process.env.SP_KEY_ALIAS || 'stronghold';
+  let password = process.env.SP_KEY_PASSWORD || '';
   await fsp.mkdir(KEYSTORE_DIR, { recursive: true });
+  if (!password && exists(SIGNING_CONFIG)) {
+    const config = await fsp.readFile(SIGNING_CONFIG, 'utf8');
+    password = /^password=(.+)$/m.exec(config)?.[1]?.trim() || '';
+  }
+  if (!password && exists(KEYSTORE)) fail('signing password is missing; set SP_KEY_PASSWORD or mobile/keystore/local.properties');
+  if (!password) {
+    password = crypto.randomBytes(24).toString('base64url');
+    await fsp.writeFile(SIGNING_CONFIG, 'password=' + password + '\n', { mode: 0o600 });
+  }
   if (exists(KEYSTORE)) {
     const readme = path.join(KEYSTORE_DIR, 'README.md');
     if (!exists(readme)) await fsp.writeFile(readme, KEYSTORE_README(password, alias));
@@ -1439,20 +1753,20 @@ async function ensureKeystore(javaHome) {
   const keytool = path.join(javaHome, 'bin', process.platform === 'win32' ? 'keytool.exe' : 'keytool');
   const r = run(keytool, ['-genkeypair', '-keystore', KEYSTORE, '-alias', alias, '-keyalg', 'RSA', '-keysize', '2048',
     '-validity', '10950', '-storepass', password, '-keypass', password,
-    '-dname', 'CN=Stronghold Protocol (unofficial fan remake), OU=mobile, O=PRTS, L=-, ST=-, C=CN'], { capture: true, allowFail: true });
+    '-dname', 'CN=Stronghold Protocol Android, OU=mobile, O=Fuhua-code, L=-, ST=-, C=CN'], { capture: true, allowFail: true });
   if (!exists(KEYSTORE)) fail(`keytool failed:\n${r.out}`);
   await fsp.writeFile(path.join(KEYSTORE_DIR, 'README.md'), KEYSTORE_README(password, alias));
-  ok('created mobile/keystore/debug.keystore');
+  ok('created local APK signing key');
   return { password, alias };
 }
 
 const KEYSTORE_README = (password, alias) => `# mobile/keystore — APK signing key (generated by mobile/build-apk.mjs)
 
-    file       debug.keystore
+    file       local.keystore
     alias      ${alias}
-    password   ${password}   (store password and key password)
+    password   configured in local.properties or SP_KEY_PASSWORD (never commit it)
     validity   30 years
-    subject    CN=Stronghold Protocol (unofficial fan remake), OU=mobile, O=PRTS, C=CN
+    subject    CN=Stronghold Protocol Android, OU=mobile, O=Fuhua-code, C=CN
 
 This is a self-signed **debug** key: it exists only so that Android accepts the APK and so that later builds can
 replace an installed copy (Android refuses an update whose signature differs). Builds of this fan project are
@@ -1464,7 +1778,7 @@ and **keep it out of the repository**:
 
 then sign with \`apksigner sign --ks mobile/keystore/release.keystore …\` instead of re-running this script's default.
 
-The keystore is deliberately **not** committed (.gitignore): anyone can generate their own.
+The keystore and local.properties are deliberately **not** committed (.gitignore): each builder generates their own.
 `;
 
 main().then((code) => { process.exitCode = code; }, (e) => {

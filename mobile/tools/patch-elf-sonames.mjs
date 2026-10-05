@@ -90,13 +90,13 @@ export function patchElfSonames(buf, rename) {
     const addr = Number(buf.readBigUInt64LE(off + 0x10));
     if (addr === Number(strtabVaddr)) { strtabOff = Number(buf.readBigUInt64LE(off + 0x18)); break; }
   }
-  // fall back: .dynstr usually follows .dynamic closely; locate it by the first readable string
-  if (strtabOff == null) strtabOff = dyn.offset + dyn.size;
+  if (strtabOff == null) throw new Error('DT_STRTAB does not resolve to a string table section');
   const strEnd = strtabOff + Number(strsz);
+  if (strtabOff < 0 || strEnd > buf.length || strEnd < strtabOff) throw new Error('dynamic string table is outside the ELF file');
 
   const readStr = (offset) => {
     const end = buf.indexOf(0, offset);
-    if (end < 0 || end >= strEnd) return '';
+    if (offset < strtabOff || offset >= strEnd || end < 0 || end >= strEnd) throw new Error('dynamic string entry is outside the ELF string table');
     return buf.toString('utf8', offset, end);
   };
   const writeStr = (offset, value) => {
@@ -162,13 +162,7 @@ export async function patchRuntimeDir(dir, { dryRun = false } = {}) {
     const p = path.join(root, f);
     const buf = await fsp.readFile(p);
     if (buf.length < 4 || buf.readUInt32LE(0) !== 0x464c457f) continue; // not ELF (e.g. the ICU data blob): skip
-    let out;
-    try {
-      out = patchElfSonames(Buffer.from(buf), rename);
-    } catch (e) {
-      log.push(`! ${f}: ${e.message}`);
-      continue;
-    }
+    const out = patchElfSonames(Buffer.from(buf), rename);
     if (out.changed.length) {
       patched++;
       log.push(`${f}: ${out.changed.join(', ')}`);

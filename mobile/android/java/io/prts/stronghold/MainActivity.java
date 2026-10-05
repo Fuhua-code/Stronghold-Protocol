@@ -78,6 +78,7 @@ import java.util.UUID;
 public class MainActivity extends Activity {
     private static final String TAG = "StrongholdProtocol";
     private static final String PREFS = "sp_android";
+    private static final String K_OPEN_LAN = "openLan";
     private static final String K_LAST_UPDATE = "lastUpdateTime";
     private static final String K_VERSION = "versionName";
     /** How long the server may take to write its handshake before we give up (a slow phone needs a few seconds). */
@@ -101,6 +102,7 @@ public class MainActivity extends Activity {
     private TextView status;
     private TextView detail;
     private Button actionButton;
+    private Button networkButton;
     private JSONObject handshake;
     private AlertDialog sslDialog;
     private String localServerUrl;
@@ -115,9 +117,9 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        Log.i(TAG, "onCreate: sdk=" + Build.VERSION.SDK_INT + " abi=" + Build.SUPPORTED_ABIS[0] + " started=" + sServerStarted);
+        Log.i(TAG, "onCreate: sdk=" + Build.VERSION.SDK_INT + " abi=" + Build.SUPPORTED_ABIS[0] + " node=" + processAlive(sNodeProcess));
         buildUi();
-        handshake = readHandshakeFile();
+        handshake = readValidHandshake(new File(getFilesDir(), "handshake.json"));
         if (handshake != null) localServerUrl = handshake.optString("url", null);
         if (savedInstanceState != null && savedInstanceState.containsKey("url")) {
             String savedUrl = savedInstanceState.getString("url");
@@ -277,6 +279,31 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         btnLp.topMargin = dp(18);
         overlay.addView(actionButton, btnLp);
+
+        networkButton = new Button(this);
+        networkButton.setText(networkLabel());
+        networkButton.setTextColor(FG);
+        networkButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        networkButton.setOnClickListener(v -> {
+            boolean open = !getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(K_OPEN_LAN, false);
+            getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(K_OPEN_LAN, open).apply();
+            networkButton.setText(networkLabel());
+            if (processAlive(sNodeProcess)) {
+                final Process old = sNodeProcess;
+                stopNodeProcess("LAN binding changed");
+                new Thread(() -> {
+                    while (processAlive(old)) {
+                        try { Thread.sleep(100); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
+                    }
+                    if (!isFinishing()) ui.post(this::startEverything);
+                }, "sp-lan-restart").start();
+            } else if (!sServerStarted) {
+                startEverything();
+            }
+        });
+        LinearLayout.LayoutParams networkLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        networkLp.topMargin = dp(8);
+        overlay.addView(networkButton, networkLp);
 
         root.addView(overlay, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
@@ -599,8 +626,19 @@ public class MainActivity extends Activity {
             Log.w(TAG, "package info unavailable", e);
         }
         boolean changed = last != prefs.getLong(K_LAST_UPDATE, 0) || !version.equals(prefs.getString(K_VERSION, ""));
-        prefs.edit().putLong(K_LAST_UPDATE, last).putString(K_VERSION, version).apply();
         return changed;
+    }
+
+    private void markApkUpdated() {
+        try {
+            PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
+            getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                    .putLong(K_LAST_UPDATE, pi.lastUpdateTime)
+                    .putString(K_VERSION, pi.versionName == null ? "" : pi.versionName)
+                    .apply();
+        } catch (Exception e) {
+            Log.w(TAG, "package info unavailable while marking update", e);
+        }
     }
 
     /**
@@ -640,6 +678,7 @@ public class MainActivity extends Activity {
                 copyAssetFolder(getAssets(), PROJECT + "/public", new File(dir, "public"));
                 Log.i(TAG, "art copied in " + (System.currentTimeMillis() - t0) + " ms");
             }
+            markApkUpdated();
         } catch (Exception e) {
             Log.e(TAG, "asset copy failed", e);
             showError("无法解压游戏数据", String.valueOf(e.getMessage()), "退出", new Runnable() {
@@ -690,7 +729,7 @@ public class MainActivity extends Activity {
         nodeArgs.add("--handshake");
         nodeArgs.add(handshakeFile.getAbsolutePath());
         nodeArgs.add("--host");
-        nodeArgs.add("0.0.0.0");
+        nodeArgs.add(getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(K_OPEN_LAN, false) ? "0.0.0.0" : "127.0.0.1");
         nodeArgs.add("--port");
         nodeArgs.add("0");
 
@@ -779,6 +818,24 @@ public class MainActivity extends Activity {
                 sNodeProcess = null;
                 sServerStarted = false;
             }
+        }
+    }
+
+    private String networkLabel() {
+        return getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(K_OPEN_LAN, false)
+                ? "局域网访问：开启（点击关闭）" : "局域网访问：关闭（点击开启）";
+    }
+
+    private JSONObject readValidHandshake(File file) {
+        if (!file.isFile()) return null;
+        try {
+            JSONObject json = new JSONObject(new String(readAll(file), StandardCharsets.UTF_8));
+            String url = json.optString("url", "");
+            if (!url.startsWith("http://127.0.0.1:") || json.optInt("health", 0) != 200 || !json.optBoolean("ws", false)) return null;
+            return json;
+        } catch (Exception e) {
+            Log.w(TAG, "invalid existing handshake", e);
+            return null;
         }
     }
 

@@ -11,8 +11,8 @@ npm run apk
 （取决于网速）；之后重跑只需十几秒到一分钟。产物：
 
 ```
-mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a.apk     约 352 MB，v2+v3 已签名（默认：手机）
-mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a-x86_64.apk   约 440 MB（npm run apk:all：手机 + 模拟器）
+mobile/build/Stronghold-Protocol-<version>-arm64-v8a.apk     约 352 MB，v1+v2+v3 已签名（默认：手机）
+mobile/build/Stronghold-Protocol-<version>-arm64-v8a-x86_64.apk   约 440 MB（npm run apk:all：手机 + 模拟器）
 ```
 
 文件名带 ABI，所以两种包可以在同一目录并存、互不覆盖。默认只打 arm64（手机就只需要自己那一套 ABI，Android 也
@@ -35,7 +35,7 @@ mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a-x86_64.apk   约 440 MB（npm r
 | `npm run apk:check` | 自检：**不构建**，只验证「这个克隆能不能出包」（11 项） |
 | `npm run apk:prepare` | 只准备（工具链 + Node 运行时 + 待打包目录），不打 APK |
 | `npm run apk:verify` | 构建后跑三项验证：服务器自检 → APK 解包实跑 → 无头浏览器点到休整期 |
-| `adb install -r mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a.apk` | 装到手机 |
+| `adb install -r mobile/build/Stronghold-Protocol-<version>-arm64-v8a.apk` | 装到手机 |
 | `adb logcat -s StrongholdProtocol` | 看应用与 Node 的日志 |
 
 `mobile/build-apk.mjs` 也直接接受参数：
@@ -81,7 +81,7 @@ npm run apk
    ├─ 6. 打包             自写 ZIP 打包器：aapt2 的产物 + classes.dex + lib/<abi>/** + assets/**
    │                     全部未压缩存储，lib/**.so 4 字节对齐
    │
-   ├─ 7. 签名             zipalign → apksigner（v2+v3，密钥 mobile/keystore/debug.keystore，首次自动生成）
+   ├─ 7. 签名             zipalign → apksigner（v1+v2+v3，本地密钥首次自动生成）
    │
    └─ 8. 核验             apksigner verify · aapt2 dump badging/xmltree · 清单里每个 @type/name 都在资源表内
                           · 资源表引用的 res/** 都真的在 APK 里 · 每个 ABI 都带齐 node+9 个库 · 素材齐全
@@ -90,7 +90,7 @@ npm run apk
 **手机上运行时**：`MainActivity` 首次启动把 `assets/nodejs-project` 解压到应用私有目录（实测约 3 秒），然后
 用 `ProcessBuilder` 运行 `lib/arm64-v8a/node`（`LD_LIBRARY_PATH` 指向 `nativeLibraryDir`；若直接 exec 被
 Android 的 W^X 拒绝，自动改走 `/system/bin/linker64 <node>`）。服务器用**未改动**的 `startServer()` 在
-`0.0.0.0:0` 上监听，自检 `/healthz` 与一次 `/ws` 升级成功后写 `handshake.json`；Activity 轮询到端口后让
+默认仅在 `127.0.0.1:0` 上监听；用户在启动界面明确开启局域网访问后才使用 `0.0.0.0:0`。服务器自检 `/healthz` 与一次 `/ws` 升级成功后写 `handshake.json`；Activity 轮询到端口后让
 WebView 打开 `http://127.0.0.1:<端口>/`。客户端与服务器同源，WebSocket、音频、触摸、刘海屏安全区行为与手机
 浏览器一致。
 
@@ -148,7 +148,7 @@ assets/nodejs-project/
 ```bash
 npm run apk:all                            # 手机 + 模拟器：一个 APK 里带两套运行时
 adb connect 127.0.0.1:5555                 # MuMu 的调试端口（模拟器界面里可查；蓝叠/雷电常用 5555 / 7555）
-adb -s 127.0.0.1:5555 install -r mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a-x86_64.apk
+adb -s 127.0.0.1:5555 install -r mobile/build/Stronghold-Protocol-<version>-arm64-v8a-x86_64.apk
 ```
 
 也可以 `npm run apk && node mobile/build-apk.mjs --abi=x86_64` 分别出两个单 ABI 的包（各约 352 MB）。
@@ -161,7 +161,7 @@ adb -s 127.0.0.1:5555 install -r mobile/build/Stronghold-Protocol-0.1.0-arm64-v8
 | Node.js 版本 | 24.18.0（Termux `nodejs-lts`），与桌面版要求一致，服务器代码无需改动。 |
 | 官方 3D 棋盘 | **不可用**：官方棋盘贴图要用 Python + UnityPy 从本机《明日方舟》PC 客户端提取，手机上做不到；游戏自动使用 2D 棋盘（其余美术、Spine 小人、音乐音效都在 APK 里）。 |
 | 端口 | 手机是服务器，端口由系统分配（避开 Android 的低端口限制），启动日志与游戏内都会显示实际地址。 |
-| 应用签名 | 自签名（`mobile/keystore/debug.keystore`，首次构建时生成）。更新必须用同一个密钥重新签名。 |
+| 应用签名 | 本地自签名（首次构建时生成）。更新必须用同一个密钥重新签名。 |
 | 后台与息屏 | 游戏期间保持屏幕常亮；切到后台时页面暂停、服务器继续运行，队友按原有「断线 / 暂离」机制继续。 |
 
 ---
@@ -195,13 +195,13 @@ mobile/                        ← 打包器（本分支新增，其他文件与
 在 **realme RMX3820 · Android 16（API 36）· arm64-v8a** 上实测：
 
 ```
-adb install -r mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a.apk    # Success
-adb shell am start -n io.prts.stronghold/.MainActivity
+adb install -r mobile/build/Stronghold-Protocol-<version>-arm64-v8a.apk    # Success
+adb shell am start -n io.github.fuhuacode.stronghold/.MainActivity
 
 copy: apkChanged=true needCode=true needArt=true
 program copied in 391 ms
 art copied in 2531 ms
-node: [mobile] listening on 0.0.0.0:37305 (healthz 200, websocket ok)
+node: [mobile] listening on 127.0.0.1:<port> (healthz 200, websocket ok)
 server ready on http://127.0.0.1:37305/  lan=http://172.30.243.175:37305  node=24.18.0
 WebView loading http://127.0.0.1:37305/
 ```
