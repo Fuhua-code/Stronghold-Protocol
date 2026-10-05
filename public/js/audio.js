@@ -1,7 +1,8 @@
 // Audio manager (Web Audio): BGM per phase, UI SFX, per-unit battle SFX. Never throws.
 //
 // Sources: data/assets.json → audio (docs/ASSETS.md):
-//   bgm { lobby, prep, combat, boss: { intro?, loop } }, bossBgm { [bossId]: { intro?, loop } },
+//   bgm { lobby, prep, combat, combatAlts?: [ {intro?, loop}, … ], boss: { intro?, loop } },
+//   bossBgm { [bossId]: { intro?, loop } },
 //   sfx.ui { click, buy, sell, refresh, freeze, levelup, merge, equip, ready, timer, yourTurn, … },
 //   sfx.battle { deploy, tokenDeploy, charDie, tokenDie?, enemyDie, enemyHit, heal, killCoin, … },
 //   sfx.units { [charId|tokenId|enemyId]: { attack?, hit?, skill?, die?, born?, mix?: { [role]: { p?, vol? } } } }.
@@ -11,6 +12,10 @@
 // - Channels: master → { bgm, sfx } gains; volumes from settings (0..1) + mute. Tab hidden ⇒ suspend.
 // - BGM: `intro` then `loop` (1 s crossfade); switching tracks fades out/in (0.8 s). The same loop URL
 //   keeps playing across phases (prep and combat share a track).
+// - 开战 BGM: `bgm.combatAlts` are the mode's own battle tracks (塞壬唱片 骑士之日 / 无畏者). The track is fixed per
+//   round, not drawn: 无畏者 through rounds 1–7 and 骑士之日 from round 8 on (`combatTrackFor`, the official
+//   schedule), so every client of a match hears the same one, a fight never switches track halfway through and the
+//   联防 that follows a 作战 keeps its round's track.
 // - Battle SFX from `b.ev` tuples (`handleBattleEvents`): at most MAX_VOICES concurrent unit sounds, at most
 //   MAX_PER_URL overlapping copies of one sound (the official banks' maxSoundAllowed 2), a per-unit cooldown and a
 //   per-URL minimum gap (SfxLimiter), so a 60-unit fight stays listenable.
@@ -59,9 +64,11 @@ const SKILL_MODE_FILE = /_(d|h|s)\d*\.mp3$/i;
  * BGM key for a route + match phase.
  * @param {'title'|'lobby'|'room'|'game'|string} route
  * @param {any} pub m.public (may be null)
- * @returns {string|null} 'lobby' | 'prep' | 'combat' | 'unite' | 'boss' | 'boss:<bossId>' | null
+ * @param {0|1|null} [combatTrack] the round's own 开战 track index into `bgm.combatAlts` (combatTrackFor; omitted ⇒
+ *   plain 'combat', i.e. the manifest's default combat track)
+ * @returns {string|null} 'lobby' | 'prep' | 'combat' | 'combat:<i>' | 'unite' | 'boss' | 'boss:<bossId>' | null
  */
-export function bgmKeyFor(route, pub) {
+export function bgmKeyFor(route, pub, combatTrack = null) {
   if (route !== 'game') return route === 'title' || route === 'lobby' || route === 'room' ? 'lobby' : null;
   const phase = pub?.phase;
   if (!phase) return 'lobby';
@@ -74,7 +81,8 @@ export function bgmKeyFor(route, pub) {
       // resolveBgm falls back to `bgm.combat` when a manifest predates it.
       return 'unite';
     case PHASE.COMBAT:
-      return 'combat';
+      // 开战 BGM: the round's own track — 骑士之日 / 无畏者 are fixed per round, not drawn (combatTrackFor)
+      return combatTrack == null ? 'combat' : `combat:${combatTrack ? 1 : 0}`;
     case PHASE.FINAL_ASSAULT:
       return pub.bossId ? `boss:${pub.bossId}` : 'boss';
     case PHASE.HIDDEN_CORE:
@@ -85,8 +93,9 @@ export function bgmKeyFor(route, pub) {
 }
 
 /**
- * Resolve a BGM key to { intro?, loop } URLs from the manifest: `boss:<id>` falls back to the generic boss track and
- * `unite` (联防's own track) to `bgm.combat` when the manifest predates it.
+ * Resolve a BGM key to { intro?, loop } URLs from the manifest: `boss:<id>` falls back to the generic boss track,
+ * `combat:<i>` to the i-th `bgm.combatAlts` entry (and to `bgm.combat` when the manifest has none), and `unite`
+ * (联防's own track) to `bgm.combat` when the manifest predates it.
  * @param {any} manifest
  * @param {string|null} key
  * @returns {{ intro: string|null, loop: string }|null}
@@ -96,10 +105,31 @@ export function resolveBgm(manifest, key) {
   if (!a || !key) return null;
   let t = null;
   if (key.startsWith('boss:')) t = a.bossBgm?.[key.slice(5)] || a.bgm?.boss;
+  else if (key.startsWith('combat:')) t = a.bgm?.combatAlts?.[Number(key.slice('combat:'.length))] || a.bgm?.combat;
   else if (key === 'unite') t = a.bgm?.unite || a.bgm?.combat;
   else t = a.bgm?.[key];
   if (!t || typeof t.loop !== 'string') return null;
   return { intro: typeof t.intro === 'string' ? t.intro : null, loop: t.loop };
+}
+
+/**
+ * The last round that plays 无畏者 (1–7); from the next round on it is 骑士之日 (8–13) — the official schedule
+ * (docs/ASSETS.md "BGM"; the two tracks are the 塞壬唱片 act13side battle themes).
+ */
+export const COMBAT_TRACK_SWITCH_ROUND = 7;
+
+/**
+ * The round's own 开战 track index into `bgm.combatAlts` (plan.mjs order: 0 = `m_bat_kazimierz2_1` 骑士之日,
+ * 1 = `m_bat_kazimierz2_2` 无畏者). The mode does not draw these: the official schedule plays one per round, 无畏者
+ * through the early rounds (1–7) and 骑士之日 from round 8 to the last normal round (8–13). Everything after that is
+ * the boss rounds (最终攻势 / 隐秘核心), which have their own tracks and never ask for `combat:<i>`.
+ * @param {number|null|undefined} round m.public.round
+ * @returns {0|1|null} null when the round is unknown ⇒ the manifest's plain `combat` track
+ */
+export function combatTrackFor(round) {
+  const r = Number(round);
+  if (!Number.isFinite(r) || r < 1) return null;
+  return r <= COMBAT_TRACK_SWITCH_ROUND ? 1 : 0;
 }
 
 /**
@@ -718,7 +748,13 @@ export function installAudio(deps) {
     if (deps?.settings) audio.setVolumes(deps.settings);
     if (typeof deps?.subscribe === 'function' && typeof deps?.getState === 'function') {
       const sync = (s) => {
-        try { audio.playBgm(bgmKeyFor(deps.selectRoute(s), s.match?.public)); } catch { /* ignore */ }
+        try {
+          const pub = s.match?.public ?? null;
+          // 开战 BGM: the round's own track out of bgm.combatAlts (骑士之日 / 无畏者 are fixed per round, not drawn),
+          // so every client of a room hears the same one, a mid-fight re-render (or a teammate view) never switches,
+          // and the next round moves on by the table. 联防 shares its round ⇒ same key ⇒ the loop keeps playing.
+          audio.playBgm(bgmKeyFor(deps.selectRoute(s), pub, combatTrackFor(pub?.round)));
+        } catch { /* ignore */ }
       };
       sync(deps.getState());
       return deps.subscribe((s, prev) => {

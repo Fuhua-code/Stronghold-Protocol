@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { bgmKeyFor, resolveBgm, SfxLimiter, AudioManager, normalAttackSfx } from '../../public/js/audio.js';
+import { bgmKeyFor, resolveBgm, SfxLimiter, AudioManager, normalAttackSfx, installAudio, audio, combatTrackFor, COMBAT_TRACK_SWITCH_ROUND } from '../../public/js/audio.js';
 import { mediaUrl } from '../../public/js/media.js';
 import { PHASE } from '../../shared/constants.js';
 
@@ -32,11 +32,37 @@ describe('bgm selection', () => {
     assert.equal(bgmKeyFor('game', { phase: PHASE.COMBAT }), 'combat');
     // 联防 has its own track: the official escaped_single / escaped_multi levels declare bgmEvent = corrosion
     assert.equal(bgmKeyFor('game', { phase: PHASE.UNITE }), 'unite');
+    // 开战 BGM: the round's own track (combatTrackFor) indexes the manifest's `bgm.combatAlts`
+    assert.equal(bgmKeyFor('game', { phase: PHASE.COMBAT }, 0), 'combat:0');
+    assert.equal(bgmKeyFor('game', { phase: PHASE.COMBAT }, 1), 'combat:1');
+    assert.equal(bgmKeyFor('game', { phase: PHASE.UNITE }, 1), 'unite', '联防 keeps its own track, not the round index');
+    assert.equal(bgmKeyFor('game', { phase: PHASE.PREP }, 1), 'prep');
+    assert.equal(bgmKeyFor('game', { phase: PHASE.FINAL_ASSAULT, bossId: 'boss_4' }, 1), 'boss:boss_4');
     assert.equal(bgmKeyFor('game', { phase: PHASE.FINAL_ASSAULT, bossId: 'boss_4' }), 'boss:boss_4');
     assert.equal(bgmKeyFor('game', { phase: PHASE.FINAL_ASSAULT }), 'boss');
-    assert.equal(bgmKeyFor('game', { phase: PHASE.HIDDEN_CORE, bossId: 'boss_1', hiddenBossId: 'boss_9' }), 'boss:boss_9');
+    assert.equal(bgmKeyFor('game', { phase: PHASE.HIDDEN_CORE, bossId: 'boss_1', hiddenBossId: 'boss_9' }, 1), 'boss:boss_9');
     assert.equal(bgmKeyFor('game', { phase: PHASE.RESULT }), 'lobby');
     assert.equal(bgmKeyFor('weird', null), null);
+  });
+  test('开战 BGM: the track is fixed per round, not drawn (无畏者 1–7, 骑士之日 8–13)', () => {
+    // The mode does not draw its battle theme: the official schedule plays 无畏者 through the early rounds and
+    // 骑士之日 from round 8 on (reviewer note — review had this as a per-match 0.5 draw before).
+    for (const r of [1, 2, 3, 4, 5, 6, 7]) assert.equal(combatTrackFor(r), 1, `round ${r} plays 无畏者`);
+    for (const r of [8, 9, 10, 11, 12, 13]) assert.equal(combatTrackFor(r), 0, `round ${r} plays 骑士之日`);
+    assert.equal(COMBAT_TRACK_SWITCH_ROUND, 7, 'the switch sits between round 7 and 8');
+    // the boss rounds (14 最终攻势 / 15 隐秘核心) have their own tracks and never ask for combat:<i>
+    assert.equal(bgmKeyFor('game', { phase: PHASE.FINAL_ASSAULT, round: 14 }, combatTrackFor(14)), 'boss');
+    // an unknown round falls back to the manifest's plain combat track (older manifest / no round yet)
+    for (const bad of [null, undefined, 0, -1, NaN, 'x']) assert.equal(combatTrackFor(bad), null, `${bad} ⇒ no index`);
+    assert.equal(bgmKeyFor('game', { phase: PHASE.COMBAT, round: 3 }, combatTrackFor(null)), 'combat');
+    // both ends of a real run: a solo 标准 match is 9 rounds, so it hears 无畏者 and then 骑士之日
+    assert.equal(bgmKeyFor('game', { phase: PHASE.COMBAT, round: 7 }, combatTrackFor(7)), 'combat:1');
+    assert.equal(bgmKeyFor('game', { phase: PHASE.COMBAT, round: 8 }, combatTrackFor(8)), 'combat:0');
+    // the index↔track mapping this table assumes, from docs/ASSETS.md: combatAlts[0] = m_bat_kazimierz2_1 骑士之日,
+    // combatAlts[1] = m_bat_kazimierz2_2 无畏者 (a reordering upstream breaks this test, not the players' ears)
+    const alt = manifest.audio.bgm.combatAlts;
+    assert.ok(alt[0].loop.includes('m_bat_kazimierz2_1'), `combatAlts[0] is 骑士之日: ${alt[0].loop}`);
+    assert.ok(alt[1].loop.includes('m_bat_kazimierz2_2'), `combatAlts[1] is 无畏者: ${alt[1].loop}`);
   });
   test('resolveBgm uses the manifest (boss fallback, intro optional)', () => {
     const lobby = resolveBgm(manifest, 'lobby');
@@ -44,6 +70,15 @@ describe('bgm selection', () => {
     const b4 = resolveBgm(manifest, 'boss:boss_4');
     assert.equal(b4.loop, manifest.audio.bossBgm.boss_4.loop);
     assert.equal(resolveBgm(manifest, 'boss:nope').loop, manifest.audio.bgm.boss.loop);
+    // 开战 BGM: combat:<i> → bgm.combatAlts[i], and back to the default combat track when the index (or the whole
+    // array, e.g. an older manifest) is missing
+    const alts = manifest.audio.bgm.combatAlts;
+    assert.ok(Array.isArray(alts) && alts.length >= 2, 'manifest carries the mode’s own battle tracks');
+    assert.equal(resolveBgm(manifest, 'combat:0').loop, alts[0].loop);
+    assert.equal(resolveBgm(manifest, 'combat:1').loop, alts[1].loop);
+    assert.notEqual(alts[0].loop, manifest.audio.bgm.combat.loop, 'a real battle track, not the shop loop');
+    assert.equal(resolveBgm(manifest, 'combat:9').loop, manifest.audio.bgm.combat.loop);
+    assert.equal(resolveBgm({ audio: { bgm: { combat: { loop: '/shop.mp3' } } } }, 'combat:0').loop, '/shop.mp3');
     assert.equal(resolveBgm(manifest, 'prep').intro, manifest.audio.bgm.prep.intro ?? null);
     // 联防's own track (bgm.unite = corrosion, the official escaped levels' bgmEvent), and the fallback for an older
     // manifest that has no `unite` entry (the music must not go silent)
@@ -56,6 +91,49 @@ describe('bgm selection', () => {
     assert.equal(resolveBgm(null, 'lobby'), null);
     assert.equal(resolveBgm(manifest, null), null);
     assert.equal(resolveBgm(manifest, 'nope'), null);
+  });
+  test('installAudio: the round\'s own 开战 track, fixed per round and the same on every client', () => {
+    const calls = [];
+    const origPlay = audio.playBgm;
+    audio.playBgm = (k) => { calls.push(k); };
+    try {
+      const pub = (o) => ({ phase: PHASE.PREP, round: 1, stageId: 'st1', players: [{ playerId: 'p1' }], ...o });
+      const state = { route: 'game', match: { public: pub({}) } };
+      let fire = null;
+      /** One client: its own store subscription (the expected keys below are what its own round yields — the point of
+       * the test is that the track follows the round, never moves inside a battle and never differs between clients). */
+      const wire = () => installAudio({
+        getManifest: () => manifest, getState: () => state, selectRoute: (s) => s.route,
+        subscribe: (fn) => { fire = fn; return () => {}; },
+      });
+      wire();
+      assert.equal(calls.at(-1), 'prep', 'the prep keeps the shop track');
+      // round 1 ⇒ 无畏者 (combatAlts[1])
+      state.match.public = pub({ phase: PHASE.COMBAT });
+      fire(state, {}); assert.equal(calls.at(-1), 'combat:1');
+      // a re-render / teammate view inside the same battle never moves
+      fire(state, {}); assert.equal(calls.at(-1), 'combat:1');
+      // 联防 has its OWN track (#110, the official escaped levels' `bgmEvent = corrosion`) — it does not inherit the
+      // round's 开战 track
+      state.match.public = pub({ phase: PHASE.UNITE });
+      fire(state, {}); assert.equal(calls.at(-1), 'unite');
+      // …and back to the round's own track in the 作战
+      state.match.public = pub({ phase: PHASE.COMBAT });
+      fire(state, {}); assert.equal(calls.at(-1), 'combat:1', "back to the round's own track");
+      // a second client of the same room hears the same track (its own installAudio, same round)
+      calls.length = 0; wire();
+      assert.deepEqual(calls, ['combat:1'], 'every client of the match hears the same track');
+      // round 7 is the last on 无畏者, round 8 switches to 骑士之日 (combatAlts[0]) — whoever sits in seat 1
+      state.match.public = pub({ round: 7, phase: PHASE.COMBAT });
+      fire(state, {}); assert.equal(calls.at(-1), 'combat:1');
+      state.match.public = pub({ round: 8, phase: PHASE.COMBAT });
+      fire(state, {}); assert.equal(calls.at(-1), 'combat:0');
+      state.match.public = pub({ round: 8, phase: PHASE.COMBAT, players: [{ playerId: 'p2' }] });
+      fire(state, {}); assert.equal(calls.at(-1), 'combat:0', 'the track does not depend on the seats');
+      // the boss rounds keep their own tracks
+      state.match.public = pub({ phase: PHASE.FINAL_ASSAULT, bossId: 'boss_4' });
+      fire(state, {}); assert.equal(calls.at(-1), 'boss:boss_4');
+    } finally { audio.playBgm = origPlay; }
   });
 });
 
