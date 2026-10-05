@@ -20,7 +20,7 @@
 //     --no-fetch-assets   never download the game art (fail with instructions instead)
 //     --skip-dex          skip javac/d8 (fast iteration on the packaged assets)
 //     --no-node           skip the Node runtime (a client-only APK that must point at a real server)
-//     --no-download       never download toolchain pieces outside `npm install` / the art step (fail instead)
+//     --no-download       never download Termux runtime packages (fail instead)
 //     --toolchain=<dir>   toolchain root (default <workspace>/.toolchain, then <repo>/.toolchain)
 //     --json=<file>       write a build report
 //     -h, --help          this text
@@ -30,11 +30,9 @@
 // with `--all-abis`, which writes a differently named file so both variants can sit side by side.
 //
 // What it does, in order (see mobile/README.md):
-//   0. one-command setup: `npm install` when node_modules is missing, `tools/fetch-assets.mjs` when the art is
-//      missing (skipped with --no-fetch-assets), so a fresh clone needs nothing else;
-//   1. require a prepared repository (public/vendor, public/assets, data/*.json) and, unless --no-download,
-//      fetch the missing pieces of the Android toolchain (JDK, cmdline-tools, build-tools, platform)
-//      into the toolchain directory;
+//   0. require a prepared checkout (dependencies, vendored client libraries and game art are never installed by
+//      the packager itself);
+//   1. require a prepared repository and a locally provisioned Android toolchain;
 //   2. fetch the Node runtime — **Termux's Node 24 LTS** (`nodejs-lts` plus its libraries: libc++, openssl,
 //      c-ares, libicu, libsqlite, zlib) from packages.termux.dev — into `mobile/build/runtime/`;
 //   3. assemble `mobile/build/nodejs-project/` — the same file set the Dockerfile ships as its runtime image,
@@ -605,10 +603,7 @@ function safeTarMemberName(value) {
   return name;
 }
 
-/**
- * Unpack a `.deb` (an `ar` archive) and return the path of its data tarball, written next to the control files
- * inside `destDir`.
- */
+/** Legacy helper retained for source compatibility; all active extraction uses extractDeb with safe paths. */
 async function unpackDeb(deb, destDir) {
   const buf = await fsp.readFile(deb);
   if (buf.subarray(0, 8).toString('ascii') !== '!<arch>\n') fail(`${deb} is not an ar archive`);
@@ -618,9 +613,9 @@ async function unpackDeb(deb, destDir) {
     const name = buf.subarray(p, p + 16).toString('ascii').trim().replace(/\/$/, '');
     const size = parseInt(buf.subarray(p + 48, p + 58).toString('ascii').trim(), 10);
     const start = p + 60;
-    if (!Number.isFinite(size) || size < 0) break;
+    if (!Number.isSafeInteger(size) || size < 0 || start + size > buf.length) fail(`${deb}: malformed ar member`);
     if (name.startsWith('data.tar')) {
-      dataPath = path.join(destDir, name);
+      dataPath = assertContainedPath(destDir, name);
       await fsp.writeFile(dataPath, buf.subarray(start, start + size));
     }
     p = start + size + (size % 2); // ar members are 2-byte aligned
@@ -1335,12 +1330,9 @@ function parseArgs(argv) {
 }
 
 /**
- * Step 0 of the one-command flow: make a fresh clone ready without the user running anything else.
+ * Step 0: verify that the checkout was prepared by the caller. Dependency installation and art extraction are
+ * intentionally explicit operations so a build cannot execute package-manager scripts or silently replace assets.
  *
- *   * `npm install` when node_modules (or the vendored client libraries) is missing;
- *   * `node tools/fetch-assets.mjs` when the art is missing — ~250 MB, resumable, and skipped entirely with
- *     `--no-fetch-assets`. Without art the game still runs, but with placeholder visuals, so the packager asks
- *     before doing it in a terminal and simply does it when it is not a terminal (CI, `npm run apk`).
  */
 async function ensureRepositoryReady(o) {
   const missing = [];
@@ -1481,7 +1473,7 @@ async function selfCheck(o) {
     }
     return 'tar + xz';
   });
-  check('code signing key', () => (exists(KEYSTORE) ? 'mobile/keystore/debug.keystore (generated)' : 'will be generated on the first build'));
+  check('code signing key', () => (exists(KEYSTORE) ? 'mobile/keystore/local.keystore (generated)' : 'will be generated on the first build'));
 
   const failed = checks.filter((c) => !c.ok);
   log(`\n${failed.length ? `\x1b[31m✘ ${failed.length} of ${checks.length} checks failed\x1b[0m` : `\x1b[32m✔ all ${checks.length} checks passed — \`npm run apk\` will produce a signed APK\x1b[0m`}\n`);
