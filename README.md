@@ -68,7 +68,7 @@ English summary: [below](#english).
    - Windows：在 PowerShell 里运行 `winget install OpenJS.NodeJS.LTS`，或到 <https://nodejs.org/zh-cn/download> 下载安装包。
    - macOS：`brew install node@22`，或到官网下载安装包。
    - Linux：发行版的包管理器、nvm 或 fnm。
-2. **下载**：在 [Releases](../../releases/latest) 页面下载 最新版本（v0.1.3）的整合包（zip），解压到一个路径较短的文件夹（Windows 上建议不要放在 OneDrive 同步的目录里）。
+2. **下载**：在 [Releases](../../releases/latest) 页面下载最新版本（v0.1.3）的整合包（zip），解压到一个路径较短的文件夹（Windows 上建议不要放在 OneDrive 同步的目录里）。
 3. **启动**
    - Windows：双击 **`scripts\start-windows.bat`**。如果弹出「安全警告」，点「运行」；Windows 防火墙弹窗请勾选「专用网络」并允许。
    - macOS / Linux：在解压出的文件夹里运行 `./scripts/start.sh`（或 `bash scripts/start.sh`）。
