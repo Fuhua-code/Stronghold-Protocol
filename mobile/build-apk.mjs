@@ -1481,7 +1481,7 @@ async function selfCheck(o) {
     }
     return 'tar + xz';
   });
-  check('code signing key', () => (exists(KEYSTORE) ? 'mobile/keystore/debug.keystore (generated)' : 'will be generated on the first build'));
+  check('code signing key', () => (exists(KEYSTORE) ? 'mobile/keystore/local.keystore (generated)' : 'will be generated on the first build'));
 
   const failed = checks.filter((c) => !c.ok);
   log(`\n${failed.length ? `\x1b[31m✘ ${failed.length} of ${checks.length} checks failed\x1b[0m` : `\x1b[32m✔ all ${checks.length} checks passed — \`npm run apk\` will produce a signed APK\x1b[0m`}\n`);
