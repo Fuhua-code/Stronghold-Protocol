@@ -18,8 +18,11 @@ test('remote probe distinguishes a client entry page, browser verification and a
   assert.equal((await probe('Doctor')).reason, 'invalid-url');
   assert.equal(visited.length, 0);
   assert.equal((await probe('http://fixture.test/')).valid, false);
-  response = () => new Response('<p>正在验证</p><script>window.location.protocol="https:"</script>', { status: 501 });
-  assert.equal((await probe('http://fixture.test/')).blocked, true);
+  response = () => new Response('<h1>501 Not Implemented</h1><p>Automatic HTTPS enabled. HTTP is invalid; redirecting to HTTPS.</p>', { status: 501 });
+  const httpsUpgrade = await probe('http://fixture.test/');
+  assert.equal(httpsUpgrade.blocked, true);
+  assert.equal(httpsUpgrade.reason, 'https-required');
+  assert.equal(httpsUpgrade.candidateUrl, 'https://fixture.test/');
   response = (url) => url.pathname === '/healthz' ? new Response('unavailable', { status: 404 })
     : new Response('<title>STRONGHOLD PROTOCOL</title><script type="module" src="/js/main.js"></script>');
   assert.equal((await probe('http://fixture.test/')).valid, true);

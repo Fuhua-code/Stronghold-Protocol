@@ -312,14 +312,15 @@ export function TitleScreen() {
       return;
     }
     if (probe.blocked) {
-      const inAppPreview = openRemotePreview(url);
+      const candidateUrl = normalizeRemoteUrl(probe.candidateUrl) || url;
+      const inAppPreview = openRemotePreview(candidateUrl);
       if (inAppPreview) return;
       const open = await confirmDialog({
         title: '链接需要验证',
         text: '该链接需要在浏览器中验证。打开后，请自行确认网页或证书提示；若无法进入游戏，可使用浏览器返回本机界面。',
         okText: '打开验证页面', cancelText: '返回本机', micro: 'REMOTE CHECK',
       });
-      if (open && typeof location !== 'undefined') location.href = url;
+      if (open && typeof location !== 'undefined') location.href = candidateUrl;
       return;
     }
     await alertDialog({ title: '请输入有效链接', text: '该地址不是可识别的游戏服务。', okText: '知道了', micro: 'REMOTE LINK' });

@@ -593,6 +593,9 @@ async function probeRemoteGame(raw, timeoutMs = 8000) {
   const normalized = normalizeRemoteUrl(raw);
   if (!normalized) return { reachable: false, valid: false, blocked: false, reason: 'invalid-url' };
   const target = new URL(normalized);
+  const httpsCandidate = target.protocol === 'http:' ? new URL(target.toString()) : null;
+  if (httpsCandidate) httpsCandidate.protocol = 'https:';
+  const pointsToHttps = (text) => /(?:automatic\s+https|auto(?:matic)?\s*https|使用\s*http[\s\S]{0,120}https|重定向到\s*https|redirect(?:ing)?\s+to\s+https)/i.test(text);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const remoteFetch = async (address) => {
@@ -613,22 +616,40 @@ async function probeRemoteGame(raw, timeoutMs = 8000) {
     if (isLoopbackTarget(new URL(health.url || healthUrl, healthUrl).hostname)) {
       return { reachable: false, valid: false, blocked: false, reason: 'local-redirect' };
     }
+    // Sakura Frp and similar tunnels return a 501 page when the tunnel has automatic HTTPS
+    // enabled but the caller used http://. Keep the page body as a browser-verification
+    // signal and provide the HTTPS candidate to the Android/browser bridge. Do not follow
+    // it here: a self-signed or untrusted certificate must remain a user decision.
+    const healthText = health.status === 501 ? (await health.text()).slice(0, 64 * 1024) : '';
+    if (health.status === 501 && pointsToHttps(healthText)) {
+      return {
+        reachable: true, valid: false, blocked: true, reason: 'https-required',
+        candidateUrl: httpsCandidate?.toString() || normalized,
+      };
+    }
     // A tunnel may return an HTML challenge (even HTTP 200) instead of /healthz. Inspect
     // the entry page as well so the browser can execute its redirect and verification UI.
-    await health.body?.cancel();
+    if (health.status !== 501) await health.body?.cancel();
     const root = await remoteFetch(new URL('/', target));
     if (isLoopbackTarget(new URL(root.url || target, target).hostname)) {
       return { reachable: false, valid: false, blocked: false, reason: 'local-redirect' };
     }
     const html = (await root.text()).slice(0, 512 * 1024);
+    if (root.status === 501 && pointsToHttps(html)) {
+      return { reachable: true, valid: false, blocked: true, reason: 'https-required',
+        candidateUrl: httpsCandidate?.toString() || normalized };
+    }
     const clientOk = root.ok && /STRONGHOLD PROTOCOL/i.test(html) && /\/js\/main\.js/i.test(html);
     const needsBrowser = !root.ok || /(?:captcha|验证|认证|防火墙|access denied|checking your browser|location\.protocol\s*=|http-equiv=["']?refresh)/i.test(html);
     return { reachable: true, valid: clientOk, blocked: !clientOk && needsBrowser,
-      reason: clientOk ? 'game' : needsBrowser ? 'browser-verification' : 'not-game' };
+      reason: clientOk ? 'game' : needsBrowser ? 'browser-verification' : 'not-game',
+      ...(needsBrowser && (target.protocol === 'https:' || /(?:location\.protocol\s*=\s*["']https|http-equiv=["']?refresh[^>]*https)/i.test(html))
+        ? { candidateUrl: target.protocol === 'https:' ? normalized : httpsCandidate.toString() } : {}) };
   } catch (error) {
     if (error?.code === 'INVALID_REMOTE_REDIRECT') return { reachable: false, valid: false, blocked: false, reason: 'local-or-invalid-redirect' };
     const timeout = error?.name === 'AbortError' || /aborted|timeout/i.test(String(error?.message || ''));
-    return { reachable: false, valid: false, blocked: true, reason: timeout ? 'timeout' : 'network-error' };
+    return { reachable: false, valid: false, blocked: true, reason: timeout ? 'timeout' : 'network-error',
+      ...(target.protocol === 'https:' ? { candidateUrl: normalized } : {}) };
   } finally {
     clearTimeout(timer);
   }

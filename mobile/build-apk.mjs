@@ -128,7 +128,7 @@ const APP = {
   package: 'io.prts.stronghold',
   label: '卫戍协议：盟约',
   versionName: null, // from package.json
-  versionCode: 1,
+  versionCode: 3,
 };
 
 // ---------------------------------------------------------------------------------------------------
@@ -917,7 +917,20 @@ async function verifyApk(apk, { apksigner, aapt2, abis, expectedArt, expectNode 
 
   // signature
   const sign = run(apksigner, ['verify', '--verbose', apk], { capture: true, allowFail: true });
-  if (!/Verified using v2 scheme \(APK Signature Scheme v2\): true/.test(sign.out) && !/Verifies/.test(sign.out)) problems.push(`apksigner: ${sign.out.split('\n').slice(-6).join(' ')}`);
+  // V1 is intentionally a compatibility signature: modern Android (API 24+) chooses V2/V3 and reports
+  // V1=false in its default verification range even when the JAR signature is present. Verify it with
+  // an API 21 range separately; the manifest still keeps minSdk 24.
+  const legacySign = run(apksigner, ['verify', '--verbose', '--min-sdk-version', '21', apk], { capture: true, allowFail: true });
+  for (const [scheme, verified] of [
+    ['v1', /Verified using v1 scheme \(JAR signing\): true/],
+    ['v2', /Verified using v2 scheme \(APK Signature Scheme v2\): true/],
+    ['v3', /Verified using v3 scheme \(APK Signature Scheme v3\): true/],
+  ]) {
+    const output = scheme === 'v1' ? legacySign.out : sign.out;
+    if (!verified.test(output)) {
+      problems.push(`APK is missing ${scheme} signature verification: ${sign.out.split('\n').slice(-8).join(' ')}`);
+    }
+  }
   const certs = run(apksigner, ['verify', '--print-certs', apk], { capture: true, allowFail: true });
   const signer = /Signer #1 certificate DN: (.*)/.exec(certs.out)?.[1]?.trim() || '?';
 
@@ -1377,7 +1390,7 @@ async function main() {
   await fsp.rm(apkOut, { force: true });
   run(sdk.apksigner, ['sign', '--ks', KEYSTORE, '--ks-pass', `pass:${store.password}`, '--key-pass', `pass:${store.password}`,
     '--ks-key-alias', store.alias, '--min-sdk-version', TOOLS.minSdk,
-    '--v1-signing-enabled', 'false', '--v2-signing-enabled', 'true', '--v3-signing-enabled', 'true',
+    '--v1-signing-enabled', 'true', '--v2-signing-enabled', 'true', '--v3-signing-enabled', 'true',
     '--out', apkOut, aligned], { env });
   await fsp.rm(aligned, { force: true });
   ok(`signed: ${path.relative(REPO, apkOut)}`);

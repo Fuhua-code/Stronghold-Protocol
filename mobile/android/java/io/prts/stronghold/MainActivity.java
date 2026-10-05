@@ -33,6 +33,7 @@ import android.content.pm.PackageInfo;
 import android.content.res.AssetManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -47,6 +48,10 @@ import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.webkit.SslErrorHandler;
+import android.net.http.SslError;
+import android.webkit.JavascriptInterface;
+import android.webkit.WebResourceRequest;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
@@ -68,6 +73,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 public class MainActivity extends Activity {
     private static final String TAG = "StrongholdProtocol";
@@ -84,7 +90,9 @@ public class MainActivity extends Activity {
     private static final String PROJECT = "nodejs-project";
 
     /** Guards against a second Activity instance trying to start a second server. */
-    private static boolean sServerStarted = false;
+    private static volatile boolean sServerStarted = false;
+    private static volatile boolean sStopping = false;
+    private static volatile Process sNodeProcess;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private FrameLayout root;
@@ -94,6 +102,10 @@ public class MainActivity extends Activity {
     private TextView detail;
     private Button actionButton;
     private JSONObject handshake;
+    private AlertDialog sslDialog;
+    private String localServerUrl;
+    private boolean remoteServerConfirmed;
+    private String remoteCheckToken;
 
     // -----------------------------------------------------------------------------------------------
     // activity lifecycle
@@ -105,8 +117,13 @@ public class MainActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         Log.i(TAG, "onCreate: sdk=" + Build.VERSION.SDK_INT + " abi=" + Build.SUPPORTED_ABIS[0] + " started=" + sServerStarted);
         buildUi();
+        handshake = readHandshakeFile();
+        if (handshake != null) localServerUrl = handshake.optString("url", null);
         if (savedInstanceState != null && savedInstanceState.containsKey("url")) {
-            loadUrl(savedInstanceState.getString("url"));
+            String savedUrl = savedInstanceState.getString("url");
+            if (isAllowedRemoteUrl(savedUrl)) loadRemoteUrl(savedUrl);
+            else loadUrl(savedUrl);
+            if (sServerStarted && localServerUrl == null) startEverything();
             return;
         }
         startEverything();
@@ -128,6 +145,13 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         if (web != null) web.onResume();
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (sslDialog != null && sslDialog.isShowing()) sslDialog.dismiss();
+        if (isFinishing() && !isChangingConfigurations()) stopNodeProcess("activity finished");
+        super.onDestroy();
     }
 
     @Override
@@ -169,11 +193,33 @@ public class MainActivity extends Activity {
         s.setUseWideViewPort(true);
         s.setLoadWithOverviewMode(true);
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
-        s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW); // the external web font is https, ours is http
+        s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         // Chrome-on-Android in mobile mode: the client's feature detection (touch / coarse pointer / landscape
         // locks / the rotate hint) behaves exactly as it does on a phone browser.
         s.setUserAgentString("Mozilla/5.0 (Linux; Android " + Build.VERSION.RELEASE + "; " + Build.MODEL + ") AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
-        web.setWebViewClient(new WebViewClient());
+        web.addJavascriptInterface(new LocalBridge(), "SP_BRIDGE");
+        web.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                return handleInternalRemoteCallback(view, request.getUrl());
+            }
+
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                return handleInternalRemoteCallback(view, Uri.parse(url));
+            }
+
+            @Override
+            public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
+                showCertificateConfirmation(handler, error);
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                inspectRemoteGamePage(url);
+            }
+        });
         web.setWebChromeClient(new WebChromeClient() {
             @Override
             public boolean onConsoleMessage(android.webkit.ConsoleMessage m) {
@@ -281,16 +327,177 @@ public class MainActivity extends Activity {
         });
     }
 
+    private final class LocalBridge {
+        @JavascriptInterface
+        public void openRemote(String url) {
+            runOnUiThread(() -> loadRemoteUrl(url));
+        }
+
+        @JavascriptInterface
+        public boolean openExternal(String url) {
+            if (!isAllowedRemoteUrl(url)) return false;
+            runOnUiThread(() -> loadRemoteUrl(url));
+            return true;
+        }
+    }
+
+    private boolean isAllowedRemoteUrl(String value) {
+        try {
+            Uri uri = Uri.parse(value);
+            String scheme = uri.getScheme();
+            String host = uri.getHost();
+            if (host == null || uri.getUserInfo() != null || !("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))) return false;
+            String h = host.toLowerCase(java.util.Locale.ROOT).replaceAll("^\\[|\\]$", "");
+            if (h.equals("localhost") || h.endsWith(".localhost") || h.equals("::1") || h.equals("::") || h.equals("0.0.0.0")) return false;
+            if (h.matches("127(?:\\.[0-9]{1,3}){3}")) return false;
+            if (h.startsWith("::ffff:")) {
+                String mapped = h.substring(7);
+                if (mapped.startsWith("127.")) return false;
+                if (mapped.matches("[0-9a-f]{1,4}:[0-9a-f]{1,4}")) {
+                    String[] pair = mapped.split(":");
+                    if ((Integer.parseInt(pair[0], 16) >>> 8) == 0x7f) return false;
+                }
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void loadRemoteUrl(String url) {
+        if (!isAllowedRemoteUrl(url)) {
+            Log.w(TAG, "rejected invalid remote URL");
+            return;
+        }
+        remoteServerConfirmed = false;
+        web.removeJavascriptInterface("SP_BRIDGE");
+        overlay.setVisibility(View.GONE);
+        web.setVisibility(View.VISIBLE);
+        web.loadUrl(url);
+        Log.i(TAG, "opening remote page " + Uri.parse(url).getHost());
+    }
+
+    private void showCertificateConfirmation(SslErrorHandler handler, SslError error) {
+        runOnUiThread(() -> {
+            if (isFinishing()) return;
+            if (sslDialog != null && sslDialog.isShowing()) { handler.cancel(); return; }
+            String url = error == null ? web.getUrl() : error.getUrl();
+            String problem = error == null ? "证书验证失败" : error.getPrimaryError() + "：" + error;
+            sslDialog = new AlertDialog.Builder(MainActivity.this)
+                    .setTitle("链接证书需要确认")
+                    .setMessage("该 HTTPS 证书无法通过系统验证，无法确认服务器身份。\n\n" + url
+                            + "\n\n仅在你信任此地址和证书来源时继续。此选择只适用于当前证书请求，不会关闭全局证书校验。\n\n" + problem)
+                    .setPositiveButton("仅本次继续", (dialog, which) -> handler.proceed())
+                    .setNegativeButton("返回本机", (dialog, which) -> {
+                        handler.cancel();
+                        returnToLocalTitle();
+                    })
+                    .setOnCancelListener(dialog -> {
+                        handler.cancel();
+                        returnToLocalTitle();
+                    })
+                    .create();
+            sslDialog.setCancelable(false);
+            sslDialog.show();
+        });
+    }
+
+    private void returnToLocalTitle() {
+        if (localServerUrl != null) {
+            web.addJavascriptInterface(new LocalBridge(), "SP_BRIDGE");
+            web.loadUrl(localServerUrl);
+        }
+    }
+
+    private void inspectRemoteGamePage(String pageUrl) {
+        if (!isAllowedRemoteUrl(pageUrl) || remoteServerConfirmed || localServerUrl == null) return;
+        String localHost = Uri.parse(localServerUrl).getHost();
+        String pageHost = Uri.parse(pageUrl).getHost();
+        if (pageHost == null || pageHost.equalsIgnoreCase(localHost)) return;
+        final String token = UUID.randomUUID().toString();
+        remoteCheckToken = token;
+        String script = "(async()=>{try{" +
+                "const until=Date.now()+10000;" +
+                "while(Date.now()<until){" +
+                "const title=!!document.querySelector('.title-screen');" +
+                "if(title){const r=await fetch('/healthz',{cache:'no-store'});" +
+                "if(r.ok){const h=await r.json();" +
+                "if(h&&h.ok===true&&typeof h.app==='string'&&Number.isInteger(h.protocol)){" +
+                "location.href='sp-remote-ready://confirm/" + token + "?url='+encodeURIComponent(location.href);return;}}}" +
+                "await new Promise(resolve=>setTimeout(resolve,500));}" +
+                "}catch(e){}})()";
+        web.evaluateJavascript(script, null);
+    }
+
+    private boolean handleInternalRemoteCallback(WebView view, Uri uri) {
+        if (!"sp-remote-ready".equals(uri.getScheme())) return false;
+        String token = uri.getLastPathSegment();
+        String pageUrl = uri.getQueryParameter("url");
+        if (remoteCheckToken != null && remoteCheckToken.equals(token) && isAllowedRemoteUrl(pageUrl)) {
+            String currentHost = Uri.parse(view.getUrl()).getHost();
+            String targetHost = Uri.parse(pageUrl).getHost();
+            String localHost = localServerUrl == null ? null : Uri.parse(localServerUrl).getHost();
+            if (currentHost != null && targetHost != null && localHost != null
+                    && currentHost.equalsIgnoreCase(targetHost) && !targetHost.equalsIgnoreCase(localHost)) {
+                remoteCheckToken = null;
+                remoteServerConfirmed = true;
+                Log.i(TAG, "remote game title and health endpoint confirmed; stopping app server");
+                stopNodeProcess("remote game confirmed");
+            }
+        }
+        return true;
+    }
+
+    private void stopNodeProcess(String reason) {
+        final Process process = sNodeProcess;
+        if (process == null) {
+            sServerStarted = false;
+            return;
+        }
+        if (sStopping) return;
+        sStopping = true;
+        Log.i(TAG, "stopping bundled Node process: " + reason);
+        new Thread(() -> {
+            process.destroy();
+            try {
+                if (!process.waitFor(3500, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                    Log.w(TAG, "Node did not stop after SIGTERM; forcing process exit");
+                    process.destroyForcibly();
+                    process.waitFor(1500, java.util.concurrent.TimeUnit.MILLISECONDS);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                process.destroyForcibly();
+            } finally {
+                if (sNodeProcess == process) sNodeProcess = null;
+                sStopping = false;
+                sServerStarted = false;
+            }
+        }, "sp-node-stop").start();
+    }
+
     // -----------------------------------------------------------------------------------------------
     // start-up pipeline
     // -----------------------------------------------------------------------------------------------
 
     private void startEverything() {
         if (sServerStarted) {
-            if (handshake != null && handshake.optString("url", null) != null) loadUrl(handshake.optString("url"));
-            else setStatus("服务器已在运行…", "正在等待本机服务器");
-            return;
+            if (!processAlive(sNodeProcess)) {
+                sServerStarted = false;
+                sNodeProcess = null;
+            } else {
+                if (handshake == null) handshake = readHandshakeFile();
+                if (handshake != null && handshake.optString("url", null) != null) {
+                    localServerUrl = handshake.optString("url");
+                    loadUrl(localServerUrl);
+                } else {
+                    setStatus("服务器已在运行…", "正在等待本机服务器");
+                    new Thread(() -> watchHandshake(new File(getFilesDir(), "handshake.json")), "sp-watch").start();
+                }
+                return;
+            }
         }
+        sStopping = false;
         sServerStarted = true;
         new Thread(new Runnable() {
             @Override
@@ -302,6 +509,26 @@ public class MainActivity extends Activity {
 
     private File projectDir() {
         return new File(getFilesDir(), PROJECT);
+    }
+
+    private JSONObject readHandshakeFile() {
+        try {
+            File file = new File(getFilesDir(), "handshake.json");
+            if (file.isFile()) return new JSONObject(new String(readAll(file), StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            Log.w(TAG, "cannot recover server handshake: " + e.getMessage());
+        }
+        return null;
+    }
+
+    private static boolean processAlive(Process process) {
+        if (process == null) return false;
+        try {
+            process.exitValue();
+            return false;
+        } catch (IllegalThreadStateException e) {
+            return true;
+        }
     }
 
     /**
@@ -432,6 +659,7 @@ public class MainActivity extends Activity {
     // -----------------------------------------------------------------------------------------------
 
     private void startNode() {
+        sStopping = false;
         final File dir = projectDir();
         final File node = runtimeNode();
         final File handshakeFile = new File(getFilesDir(), "handshake.json");
@@ -476,13 +704,15 @@ public class MainActivity extends Activity {
                     exit = runNode(nodeArgs, true);
                 }
                 if (exit == null || exit.intValue() != 0) {
-                    showError("本机服务器已停止", "Node.js 退出码 " + (exit == null ? "?" : exit)
-                            + "；请退出后重新打开应用（日志：adb logcat -s StrongholdProtocol）", "退出", new Runnable() {
-                        @Override
-                        public void run() {
-                            finish();
-                        }
-                    });
+                    if (!sStopping && !isFinishing()) {
+                        showError("本机服务器已停止", "Node.js 退出码 " + (exit == null ? "?" : exit)
+                                + "；请退出后重新打开应用（日志：adb logcat -s StrongholdProtocol）", "退出", new Runnable() {
+                            @Override
+                            public void run() {
+                                finish();
+                            }
+                        });
+                    }
                 }
             }
         }, "sp-node").start();
@@ -522,6 +752,7 @@ public class MainActivity extends Activity {
             Log.w(TAG, "cannot start Node" + (viaLinker ? " via linker64" : "") + ": " + e.getMessage());
             return null;
         }
+        sNodeProcess = proc;
         final Process running = proc;
         // The server prints its banner and every `[mobile] ...` line; forward them to logcat.
         new Thread(new Runnable() {
@@ -543,6 +774,11 @@ public class MainActivity extends Activity {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return Integer.valueOf(0);
+        } finally {
+            if (sNodeProcess == proc) {
+                sNodeProcess = null;
+                sServerStarted = false;
+            }
         }
     }
 
@@ -566,6 +802,7 @@ public class MainActivity extends Activity {
                     String url = json.optString("url", "");
                     if (url.length() > 0) {
                         handshake = json;
+                        localServerUrl = url;
                         String lan = lanList(json.optJSONArray("lan"));
                         Log.i(TAG, "server ready on " + url + (lan.length() == 0 ? "" : "  lan=" + lan) + "  node=" + json.optString("node", "?"));
                         setStatus("服务器已就绪，正在打开游戏…", lan.length() == 0 ? "正在加载客户端" : "局域网地址：" + lan);
