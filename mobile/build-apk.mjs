@@ -81,8 +81,14 @@ const REPO = path.resolve(HERE, '..');
 const BUILD = path.join(HERE, 'build');
 const ANDROID = path.join(HERE, 'android');
 const KEYSTORE_DIR = path.join(HERE, 'keystore');
-const KEYSTORE = process.env.SP_KEYSTORE ? path.resolve(process.env.SP_KEYSTORE) : path.join(KEYSTORE_DIR, 'local.keystore');
-const SIGNING_CONFIG = process.env.SP_KEYSTORE_CONFIG ? path.resolve(process.env.SP_KEYSTORE_CONFIG) : path.join(KEYSTORE_DIR, 'local.properties');
+// Keep the package identity and signing identity used by the first public Android build.  Android treats a
+// package-name or certificate change as a different application, so either one prevents an in-place update.
+// SP_KEYSTORE remains an escape hatch for a publisher's own release key.
+const KEYSTORE = process.env.SP_KEYSTORE ? path.resolve(process.env.SP_KEYSTORE) : path.join(KEYSTORE_DIR, 'debug.keystore');
+const SIGNING_CONFIG = process.env.SP_KEYSTORE_CONFIG ? path.resolve(process.env.SP_KEYSTORE_CONFIG) : path.join(KEYSTORE_DIR, 'debug.properties');
+const DEBUG_KEY_ALIAS = 'androiddebugkey';
+const DEBUG_KEY_PASSWORD = 'android';
+const LEGACY_CERT_SHA256 = '2A78C7AB34F49E9305A7496C3AF0548584DBE88C63441F0377BED632E97D9E1F';
 const TERMUX_KEY = path.join(HERE, 'keys', 'termux-autobuilds.gpg');
 const TERMUX_FINGERPRINT = 'CC72CF8BA7DBFA0182877D045A897D96E57CF20C';
 
@@ -134,7 +140,7 @@ const ALL_ABIS = ['arm64-v8a', 'x86_64'];
 const RUNTIME_LIBS = ['libc++_shared.so', 'libcares.so', 'libsqlite3.so', 'libcrypto.so', 'libssl.so', 'libicuuc.so', 'libicui18n.so', 'libicudata.so', 'libz.so'];
 
 const APP = {
-  package: 'io.github.fuhuacode.stronghold',
+  package: 'io.prts.stronghold',
   label: '卫戍协议：盟约',
   versionName: null, // from package.json
   versionCode: 3,
@@ -1481,7 +1487,9 @@ async function selfCheck(o) {
     }
     return 'tar + xz';
   });
-  check('code signing key', () => (exists(KEYSTORE) ? 'mobile/keystore/local.keystore (generated)' : 'will be generated on the first build'));
+  check('code signing key', () => (exists(KEYSTORE)
+    ? `${path.relative(REPO, KEYSTORE)} (${process.env.SP_KEYSTORE ? 'custom' : 'legacy update key'})`
+    : (process.env.SP_KEYSTORE ? 'will be generated on the first build' : 'missing legacy debug.keystore')));
 
   const failed = checks.filter((c) => !c.ok);
   log(`\n${failed.length ? `\x1b[31m✘ ${failed.length} of ${checks.length} checks failed\x1b[0m` : `\x1b[32m✔ all ${checks.length} checks passed — \`npm run apk\` will produce a signed APK\x1b[0m`}\n`);
@@ -1733,24 +1741,36 @@ async function main() {
 }
 
 async function ensureKeystore(javaHome) {
-  const alias = process.env.SP_KEY_ALIAS || 'stronghold';
+  const usingLegacyKey = !process.env.SP_KEYSTORE;
+  const alias = process.env.SP_KEY_ALIAS || (usingLegacyKey ? DEBUG_KEY_ALIAS : 'stronghold');
   let password = process.env.SP_KEY_PASSWORD || '';
   await fsp.mkdir(KEYSTORE_DIR, { recursive: true });
   if (!password && exists(SIGNING_CONFIG)) {
     const config = await fsp.readFile(SIGNING_CONFIG, 'utf8');
     password = /^password=(.+)$/m.exec(config)?.[1]?.trim() || '';
   }
-  if (!password && exists(KEYSTORE)) fail('signing password is missing; set SP_KEY_PASSWORD or mobile/keystore/local.properties');
+  if (!password && usingLegacyKey) password = DEBUG_KEY_PASSWORD;
+  if (!password && exists(KEYSTORE)) fail('signing password is missing; set SP_KEY_PASSWORD or the signing properties file');
   if (!password) {
     password = crypto.randomBytes(24).toString('base64url');
     await fsp.writeFile(SIGNING_CONFIG, 'password=' + password + '\n', { mode: 0o600 });
   }
+  const keytool = path.join(javaHome, 'bin', process.platform === 'win32' ? 'keytool.exe' : 'keytool');
   if (exists(KEYSTORE)) {
+    const details = run(keytool, ['-list', '-v', '-keystore', KEYSTORE, '-alias', alias, '-storepass', password], { capture: true, allowFail: true });
+    if (!details.ok) fail(`cannot read signing key ${KEYSTORE}; check alias/password (${alias})`);
+    if (usingLegacyKey) {
+      const certLine = /SHA256:\s*([0-9A-Fa-f:]+)/.exec(details.out)?.[1] || '';
+      const cert = certLine.replace(/[^0-9A-Fa-f]/g, '').toUpperCase();
+      if (cert !== LEGACY_CERT_SHA256) {
+        fail(`legacy APK signing certificate mismatch: expected ${LEGACY_CERT_SHA256}, got ${cert || '(none)'}; restore mobile/keystore/debug.keystore or set SP_KEYSTORE explicitly`);
+      }
+    }
     const readme = path.join(KEYSTORE_DIR, 'README.md');
     if (!exists(readme)) await fsp.writeFile(readme, KEYSTORE_README(password, alias));
     return { password, alias };
   }
-  const keytool = path.join(javaHome, 'bin', process.platform === 'win32' ? 'keytool.exe' : 'keytool');
+  if (usingLegacyKey) fail(`legacy signing key is missing: ${KEYSTORE}. It is required to update io.prts.stronghold without uninstalling the previous APK.`);
   const r = run(keytool, ['-genkeypair', '-keystore', KEYSTORE, '-alias', alias, '-keyalg', 'RSA', '-keysize', '2048',
     '-validity', '10950', '-storepass', password, '-keypass', password,
     '-dname', 'CN=Stronghold Protocol Android, OU=mobile, O=Fuhua-code, L=-, ST=-, C=CN'], { capture: true, allowFail: true });

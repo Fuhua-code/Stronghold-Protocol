@@ -108,17 +108,21 @@ export function patchElfSonames(buf, rename) {
   };
 
   const changed = [];
+  const needed = [];
+  let soname = null;
   for (const e of entries) {
     if (e.tag !== DT_NEEDED && e.tag !== DT_SONAME) continue;
     const offset = strtabOff + Number(e.val);
     const current = readStr(offset);
     if (!current) continue;
     const next = rename(current);
+    if (e.tag === DT_NEEDED) needed.push(next || current);
+    else soname = next || current;
     if (!next || next === current) continue;
     writeStr(offset, next);
     changed.push(`${e.tag === DT_SONAME ? 'SONAME' : 'NEEDED'} ${current} -> ${next}`);
   }
-  return { buf, changed };
+  return { buf, changed, needed, soname };
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -154,7 +158,18 @@ export async function patchRuntimeDir(dir, { dryRun = false } = {}) {
     const to = androidLibName(f);
     if (to) renames.set(f, to);
   }
-  const rename = (name) => renames.get(path.posix.basename(name)) ?? null;
+  // Termux often gives a library a fully versioned filename (for example
+  // libz.so.1.3.2), while another object records the shorter ABI name
+  // libz.so.1 in DT_NEEDED.  Match both forms to the legal name that is
+  // actually going into lib/<abi>/ instead of leaving a dangling dependency.
+  const legalTargets = new Set(renames.values());
+  const rename = (name) => {
+    const base = path.posix.basename(name);
+    const exact = renames.get(base);
+    if (exact) return exact;
+    const normalized = androidLibName(base);
+    return normalized && legalTargets.has(normalized) ? normalized : null;
+  };
 
   const log = [];
   let patched = 0;
@@ -177,7 +192,34 @@ export async function patchRuntimeDir(dir, { dryRun = false } = {}) {
       await fsp.rename(src, dst);
     }
   }
-  return { patched, renamed: [...renames], log };
+  if (!dryRun) {
+    const filesAfter = (await fsp.readdir(root, { withFileTypes: true }))
+      .filter((e) => e.isFile()).map((e) => e.name).sort();
+    const provided = new Set(filesAfter);
+    const sonames = new Set();
+    const dependencies = [];
+    const systemLibraries = new Set([
+      'libandroid.so', 'libc.so', 'libdl.so', 'liblog.so', 'libm.so', 'libstdc++.so',
+    ]);
+    for (const f of filesAfter) {
+      const p = path.join(root, f);
+      const buf = await fsp.readFile(p);
+      if (buf.length < 4 || buf.readUInt32LE(0) !== 0x464c457f) continue;
+      const info = patchElfSonames(Buffer.from(buf), () => null);
+      if (info.soname) sonames.add(info.soname);
+      for (const needed of info.needed) dependencies.push({ file: f, needed });
+    }
+    const unresolved = dependencies.filter(({ needed }) => {
+      if (provided.has(needed) || sonames.has(needed) || systemLibraries.has(needed)) return false;
+      const normalized = androidLibName(needed);
+      return !(normalized && (provided.has(normalized) || sonames.has(normalized)));
+    }).map(({ file, needed }) => `${file}: ${needed}`);
+    if (unresolved.length) {
+      throw new Error(`unresolved ELF DT_NEEDED entries after Android soname patching: ${unresolved.join(', ')}`);
+    }
+    return { patched, renamed: [...renames], log, dependencies: dependencies.length };
+  }
+  return { patched, renamed: [...renames], log, dependencies: null };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {

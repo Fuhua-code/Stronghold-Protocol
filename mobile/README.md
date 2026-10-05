@@ -114,7 +114,7 @@ Termux 的 Node 24 是一个普通的 PIE 可执行文件加几个共享库：�
 ## 三、产物结构
 
 ```
-AndroidManifest.xml      package io.github.fuhuacode.stronghold · minSdk 24 · targetSdk 34 · 横屏 · 明文流量
+AndroidManifest.xml      package io.prts.stronghold · minSdk 24 · targetSdk 34 · 横屏 · 明文流量
 classes.dex              MainActivity
 lib/arm64-v8a/
   node                   Node 24.18.0 可执行文件（Android 只把 lib/** 解压成可执行的原生库目录）
@@ -196,7 +196,7 @@ mobile/                        ← 打包器（本分支新增，其他文件与
 
 ```
 adb install -r mobile/build/Stronghold-Protocol-<version>-arm64-v8a.apk    # Success
-adb shell am start -n io.github.fuhuacode.stronghold/.MainActivity
+adb shell am start -n io.prts.stronghold/.MainActivity
 
 copy: apkChanged=true needCode=true needArt=true
 program copied in 391 ms
@@ -250,7 +250,7 @@ lib/x86_64/: libnode.so libc++_shared.so libcrypto.so libssl.so libicuuc.so libi
 | `npm run apk` 报缺少素材 | 首次运行会自动下载；若被网络中断，`--no-fetch-assets` 也可出包（用占位图），或手动 `node tools/fetch-assets.mjs` 续传。 |
 | 报 `xz is not available` | 解包 Termux 包需要 `xz`；Windows 10+ 自带 `tar`，`xz` 可用 `winget install xz` / `scoop install xz` 安装。 |
 | 报 `no JDK 17+ found` 且无法下载 | 用 `--toolchain=<目录>` 指向已有 JDK/SDK，或设置 `JAVA_HOME`。 |
-| 安装时报「签名不一致」 | 之前装过别的密钥签名的版本：`adb uninstall io.github.fuhuacode.stronghold` 后重装。 |
+| 安装时报「签名不一致」 | 构建器默认使用 `mobile/keystore/debug.keystore`（alias `androiddebugkey`，密码 `android`）以保持与旧版 `io.prts.stronghold` 一致；若该密钥缺失请从原构建环境恢复，或明确设置 `SP_KEYSTORE`。 |
 | 卡在「正在解压美术与音频…」 | 正常，约 4000 个文件 / 262 MB；确认手机剩余空间 ≥ 650 MB（默认 352 MB 安装包 + 262 MB 解压；双版本包为 440 MB）。 |
 | 卡在「正在启动本机服务器…」后显示错误页 | `adb logcat -s StrongholdProtocol` 看 Node 报错；多为素材解压不完整 →「设置 → 应用 → 清除数据」后重开。 |
 | 「Node 运行时缺失」 | ① APK 用 `--no-node` 构建的客户端壳 → 用默认参数重建；② 设备 ABI 不在包里（错误信息会列出包内 ABI 与本机 ABI）→ 加 `--abi=` 重建。模拟器请用默认双 ABI 构建。 |
