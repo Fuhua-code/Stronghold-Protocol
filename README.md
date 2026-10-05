@@ -37,7 +37,7 @@ English summary: [below](#english).
 
 - **独立模拟**（单人）与**同盟模拟**（1–4 人**合作**，没有 PvP；空位可以加 AI 队友）。
 - 服务器是一个 Node.js 程序，**战斗在各玩家的浏览器里模拟**（和官方一样），服务器只管经济与回合，一台低功耗小主机就能开服。
-- 这是第一个公开版本（0.1.0）。仍有少数规则按推断实现，与官方不一致的地方欢迎在 Issue 里反馈。
+- 当前版本 0.1.3：修复了 0.1.2 发布后玩家和 GitHub 上反馈的问题，详见 [CHANGELOG.md](CHANGELOG.md)。仍有少数规则按推断实现，与官方不一致的地方欢迎在 Issue 里反馈。
 
 ## 功能一览
 
@@ -68,7 +68,7 @@ English summary: [below](#english).
    - Windows：在 PowerShell 里运行 `winget install OpenJS.NodeJS.LTS`，或到 <https://nodejs.org/zh-cn/download> 下载安装包。
    - macOS：`brew install node@22`，或到官网下载安装包。
    - Linux：发行版的包管理器、nvm 或 fnm。
-2. **下载**：在 [Releases](../../releases/latest) 页面下载 v0.1.0 的整合包（zip），解压到一个路径较短的文件夹（Windows 上建议不要放在 OneDrive 同步的目录里）。
+2. **下载**：在 [Releases](../../releases/latest) 页面下载 最新版本（v0.1.3）的整合包（zip），解压到一个路径较短的文件夹（Windows 上建议不要放在 OneDrive 同步的目录里）。
 3. **启动**
    - Windows：双击 **`scripts\start-windows.bat`**。如果弹出「安全警告」，点「运行」；Windows 防火墙弹窗请勾选「专用网络」并允许。
    - macOS / Linux：在解压出的文件夹里运行 `./scripts/start.sh`（或 `bash scripts/start.sh`）。
@@ -98,9 +98,9 @@ npm start          # 启动服务器：http://localhost:3000
 
 ```bash
 npm run apk          # 一键：准备 + 构建 + 签名 + 核验（默认只打 arm64-v8a，手机用）
-                     # → mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a.apk（约 352 MB）
+                     # → mobile/build/Stronghold-Protocol-0.1.3-arm64-v8a.apk（约 352 MB）
 npm run apk:all      # 同时打 arm64-v8a + x86_64，手机与模拟器通吃
-                     # → mobile/build/Stronghold-Protocol-0.1.0-arm64-v8a-x86_64.apk（约 440 MB）
+                     # → mobile/build/Stronghold-Protocol-0.1.3-arm64-v8a-x86_64.apk（约 440 MB）
 
 npm run apk:doctor   # 体检：主机 / 仓库 / 运行时来源 / 工具链 / 已连接手机
 npm run apk:check    # 自检：不构建，只验证这个克隆能不能出包

@@ -137,7 +137,7 @@ const APP = {
   package: 'io.github.fuhuacode.stronghold',
   label: '卫戍协议：盟约',
   versionName: null, // from package.json
-  versionCode: 1,
+  versionCode: 3,
 };
 
 // ---------------------------------------------------------------------------------------------------
