@@ -20,10 +20,10 @@
 //   4. a watcher thread waits for handshake.json (written by main.js after the server answered /healthz and a
 //      WebSocket upgrade) and then loads http://127.0.0.1:<port>/ — one origin, so WebSocket, audio, touch and the
 //      safe-area insets behave exactly like in a browser tab;
-//   5. the same server is reachable from the local network (it binds 0.0.0.0), so friends can join with the
-//      `?room=KEY` link the game itself shows.
+//   5. the server is loopback-only by default. The startup screen offers an explicit LAN mode; only then does it
+//      bind 0.0.0.0 so friends can join with the `?room=KEY` link the game itself shows.
 
-package io.prts.stronghold;
+package io.github.fuhuacode.stronghold;
 
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -72,8 +72,10 @@ import java.util.Map;
 public class MainActivity extends Activity {
     private static final String TAG = "StrongholdProtocol";
     private static final String PREFS = "sp_android";
+    private static final String K_PROJECT_STAMP = "projectStamp";
     private static final String K_LAST_UPDATE = "lastUpdateTime";
     private static final String K_VERSION = "versionName";
+    private static final String K_OPEN_LAN = "openLan";
     /** How long the server may take to write its handshake before we give up (a slow phone needs a few seconds). */
     private static final int START_TIMEOUT_MS = 180000;
     /** Background colour of the loading screen (#0c0f0e, the client's own dark background). */
@@ -83,8 +85,7 @@ public class MainActivity extends Activity {
     /** The unpacked game (server code, data and the client) inside the app's private storage. */
     private static final String PROJECT = "nodejs-project";
 
-    /** Guards against a second Activity instance trying to start a second server. */
-    private static boolean sServerStarted = false;
+    private static Process sNodeProcess;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private FrameLayout root;
@@ -93,6 +94,7 @@ public class MainActivity extends Activity {
     private TextView status;
     private TextView detail;
     private Button actionButton;
+    private Button networkButton;
     private JSONObject handshake;
 
     // -----------------------------------------------------------------------------------------------
@@ -103,12 +105,8 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        Log.i(TAG, "onCreate: sdk=" + Build.VERSION.SDK_INT + " abi=" + Build.SUPPORTED_ABIS[0] + " started=" + sServerStarted);
+        Log.i(TAG, "onCreate: sdk=" + Build.VERSION.SDK_INT + " abi=" + Build.SUPPORTED_ABIS[0] + " node=" + (sNodeProcess != null));
         buildUi();
-        if (savedInstanceState != null && savedInstanceState.containsKey("url")) {
-            loadUrl(savedInstanceState.getString("url"));
-            return;
-        }
         startEverything();
     }
 
@@ -135,7 +133,10 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle("退出游戏？")
                 .setMessage("房间和对局保存在这台手机的服务器上，退出会结束所有对局。\n\n（想让朋友继续玩就选「继续游戏」，把手机留在前台。）")
-                .setPositiveButton("退出", (d, w) -> finish())
+                .setPositiveButton("退出", (d, w) -> {
+                    stopNode();
+                    finishAndRemoveTask();
+                })
                 .setNegativeButton("继续游戏", null)
                 .show();
     }
@@ -169,7 +170,7 @@ public class MainActivity extends Activity {
         s.setUseWideViewPort(true);
         s.setLoadWithOverviewMode(true);
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
-        s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW); // the external web font is https, ours is http
+        s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         // Chrome-on-Android in mobile mode: the client's feature detection (touch / coarse pointer / landscape
         // locks / the rotate hint) behaves exactly as it does on a phone browser.
         s.setUserAgentString("Mozilla/5.0 (Linux; Android " + Build.VERSION.RELEASE + "; " + Build.MODEL + ") AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
@@ -232,6 +233,23 @@ public class MainActivity extends Activity {
         btnLp.topMargin = dp(18);
         overlay.addView(actionButton, btnLp);
 
+        networkButton = new Button(this);
+        networkButton.setText(networkLabel());
+        networkButton.setTextColor(FG);
+        networkButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        networkButton.setOnClickListener(v -> {
+            boolean open = !getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(K_OPEN_LAN, false);
+            getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(K_OPEN_LAN, open).apply();
+            networkButton.setText(networkLabel());
+            if (sNodeProcess != null && sNodeProcess.isAlive()) {
+                stopNode();
+                startEverything();
+            }
+        });
+        LinearLayout.LayoutParams networkLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        networkLp.topMargin = dp(8);
+        overlay.addView(networkButton, networkLp);
+
         root.addView(overlay, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
         setStatus("正在启动本机服务器…", "首次启动要解压游戏数据，请稍候");
@@ -286,12 +304,25 @@ public class MainActivity extends Activity {
     // -----------------------------------------------------------------------------------------------
 
     private void startEverything() {
-        if (sServerStarted) {
-            if (handshake != null && handshake.optString("url", null) != null) loadUrl(handshake.optString("url"));
-            else setStatus("服务器已在运行…", "正在等待本机服务器");
-            return;
+        if (sNodeProcess != null && sNodeProcess.isAlive()) {
+            JSONObject existing = readValidHandshake(new File(getFilesDir(), "handshake.json"));
+            if (existing != null) {
+                handshake = existing;
+                loadUrl(existing.optString("url"));
+                return;
+            }
+            stopNode();
         }
-        sServerStarted = true;
+        if (sNodeProcess != null) {
+            sNodeProcess = null;
+            handshake = null;
+            if (web != null) {
+                web.stopLoading();
+                web.clearHistory();
+                web.setVisibility(View.GONE);
+            }
+            if (overlay != null) overlay.setVisibility(View.VISIBLE);
+        }
         new Thread(new Runnable() {
             @Override
             public void run() {
@@ -372,8 +403,19 @@ public class MainActivity extends Activity {
             Log.w(TAG, "package info unavailable", e);
         }
         boolean changed = last != prefs.getLong(K_LAST_UPDATE, 0) || !version.equals(prefs.getString(K_VERSION, ""));
-        prefs.edit().putLong(K_LAST_UPDATE, last).putString(K_VERSION, version).apply();
         return changed;
+    }
+
+    private void markApkUpdated() {
+        try {
+            PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
+            getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                    .putLong(K_LAST_UPDATE, pi.lastUpdateTime)
+                    .putString(K_VERSION, pi.versionName == null ? "" : pi.versionName)
+                    .apply();
+        } catch (Exception e) {
+            Log.w(TAG, "package info unavailable while marking update", e);
+        }
     }
 
     /**
@@ -413,6 +455,7 @@ public class MainActivity extends Activity {
                 copyAssetFolder(getAssets(), PROJECT + "/public", new File(dir, "public"));
                 Log.i(TAG, "art copied in " + (System.currentTimeMillis() - t0) + " ms");
             }
+            markApkUpdated();
         } catch (Exception e) {
             Log.e(TAG, "asset copy failed", e);
             showError("无法解压游戏数据", String.valueOf(e.getMessage()), "退出", new Runnable() {
@@ -462,7 +505,7 @@ public class MainActivity extends Activity {
         nodeArgs.add("--handshake");
         nodeArgs.add(handshakeFile.getAbsolutePath());
         nodeArgs.add("--host");
-        nodeArgs.add("0.0.0.0");
+        nodeArgs.add(getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(K_OPEN_LAN, false) ? "0.0.0.0" : "127.0.0.1");
         nodeArgs.add("--port");
         nodeArgs.add("0");
 
@@ -522,6 +565,7 @@ public class MainActivity extends Activity {
             Log.w(TAG, "cannot start Node" + (viaLinker ? " via linker64" : "") + ": " + e.getMessage());
             return null;
         }
+        sNodeProcess = proc;
         final Process running = proc;
         // The server prints its banner and every `[mobile] ...` line; forward them to logcat.
         new Thread(new Runnable() {
@@ -539,10 +583,47 @@ public class MainActivity extends Activity {
         try {
             int code = proc.waitFor();
             Log.i(TAG, "Node exited with " + code + (viaLinker ? " (linker64)" : ""));
+            if (sNodeProcess == proc) sNodeProcess = null;
             return Integer.valueOf(code);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return Integer.valueOf(0);
+        }
+    }
+
+    private String networkLabel() {
+        return getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(K_OPEN_LAN, false)
+                ? "局域网访问：开启（点击关闭）" : "局域网访问：关闭（点击开启）";
+    }
+
+    private void stopNode() {
+        Process proc = sNodeProcess;
+        sNodeProcess = null;
+        if (proc == null) return;
+        try {
+            proc.destroy();
+            if (!proc.waitFor(1500, java.util.concurrent.TimeUnit.MILLISECONDS)) proc.destroyForcibly();
+        } catch (Exception e) {
+            Log.w(TAG, "failed to stop Node", e);
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (isFinishing() && !isChangingConfigurations()) stopNode();
+        super.onDestroy();
+    }
+
+    private JSONObject readValidHandshake(File file) {
+        if (!file.isFile()) return null;
+        try {
+            JSONObject json = new JSONObject(new String(readAll(file), StandardCharsets.UTF_8));
+            String url = json.optString("url", "");
+            if (!url.startsWith("http://127.0.0.1:") || json.optInt("health", 0) != 200 || !json.optBoolean("ws", false)) return null;
+            return json;
+        } catch (Exception e) {
+            Log.w(TAG, "invalid existing handshake", e);
+            return null;
         }
     }
 

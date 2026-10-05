@@ -43,6 +43,9 @@ desktop.ini
 # and a toolchain placed inside the repository (the default location is <workspace>/.toolchain, outside the repo)
 mobile/build/
 mobile/keystore/
+# Termux package verification keeps one public key in the source tree; all local probes and APKs stay ignored.
+mobile/keys/*
+!mobile/keys/termux-autobuilds.gpg
 mobile/icon-512.png
 mobile/.toolchain/
 .toolchain/

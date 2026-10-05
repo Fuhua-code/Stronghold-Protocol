@@ -10,7 +10,7 @@
 //   1. Pick the game's `public/` directory: the first candidate that holds an `index.html` (Android passes the
 //      extracted assets directory; a desktop run of this file falls back to the directory next to it).
 //   2. server/index.js startServer() on an EPHEMERAL port by default (`--port 0`): Android reserves low ports and
-//      anything in use would fail the boot; `0.0.0.0` because LAN co-op is a feature (the phone is the server).
+//      anything in use would fail the boot; loopback is the default and the Android UI can explicitly opt into LAN.
 //   3. Wait until the server really answers (`/healthz` through ordinary HTTP, plus one WebSocket upgrade, which is
 //      what the game itself needs) before writing the handshake file, so the WebView is never pointed at a server
 //      that cannot serve yet.
@@ -37,7 +37,7 @@ const say = (...a) => { console.log('[mobile]', ...a); };
 
 /** Parse `--key value` / `--key=value` (unknown options are ignored, the last occurrence wins). */
 function parseArgs(argv) {
-  const o = { public: null, data: null, handshake: null, host: process.env.HOST || '0.0.0.0', port: process.env.PORT ?? '0' };
+  const o = { public: null, data: null, handshake: null, host: process.env.HOST || '127.0.0.1', port: process.env.PORT ?? '0' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const eq = a.indexOf('=');
