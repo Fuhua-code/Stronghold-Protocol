@@ -32,7 +32,10 @@ jobs:
           echo "$sha  .cache/$file" | sha256sum --check --strict
           tar -xzf ".cache/$file" -C .cache/pages-assets
       - run: npm run pages:test
-      - run: npm run pages:build
+      - name: Build Pages site with public TURN endpoint
+        env:
+          PAGES_TURN_CREDENTIALS_URL: https://fuhuaaaa-stronghold-turn-credentials.hf.space/credentials
+        run: npm run pages:build
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:

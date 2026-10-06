@@ -1,7 +1,7 @@
 import { Peer } from 'peerjs';
 import config from '#pages-config';
 import { WIRE, sameBuild, peerId } from './compat.js';
-import { PEER_CONFIG, peerFailureMessage, summarizeIceStats } from './peer-config.js';
+import { ICE_SERVERS, PEER_CONFIG, TurnCredentialCache, peerFailureMessage, summarizeIceStats } from './peer-config.js';
 
 const SIGNAL_TIMEOUT_MS = 12000;
 const DIRECT_TIMEOUT_MS = 30000;
@@ -10,8 +10,21 @@ const MAX_BUFFER = 16 * 1024 * 1024;
 const MAX_DIAGNOSTICS = 100;
 const metadata = { wire: WIRE, app: config.app, protocol: config.protocol, compat: config.compat };
 // Use independent STUN providers so a single blocked UDP endpoint does not make a room unreachable.
-// Pages remains relay-free: a network that cannot form a direct WebRTC candidate still needs TURN.
-const runtime = { mode: 'local', code: null, worker: null, ports: new Map(), host: null, failure: null, diagnostics: [], peerFactory: (id) => new Peer(id, { secure: true, config: PEER_CONFIG }) };
+// The credential broker adds short-lived TURN servers when available; direct ICE remains preferred.
+const runtime = {
+  mode: 'local', code: null, worker: null, ports: new Map(), host: null, failure: null, diagnostics: [],
+  turnState: { iceServers: ICE_SERVERS, turnAvailable: false, reason: 'not_loaded' },
+  connections: new Set(),
+  turnCredentials: null,
+  peerFactory: (id, peerConfig) => new Peer(id, { secure: true, config: peerConfig || PEER_CONFIG }),
+};
+runtime.turnCredentials = new TurnCredentialCache({ endpoint: config.turnCredentialsUrl, onUpdate: (turnState) => {
+  runtime.turnState = turnState;
+  if (!turnState.turnAvailable) return;
+  for (const connection of runtime.connections) {
+    try { connection.peerConnection?.setConfiguration?.({ ...PEER_CONFIG, iceServers: turnState.iceServers }); } catch { /* old WebViews may not support live updates */ }
+  }
+} });
 let net, identity, sequence = 0;
 
 function recordDiagnostic(role, event, details = {}) {
@@ -48,9 +61,11 @@ function snapshotConnection(connection, role) {
 }
 
 function watchDataConnection(connection, role) {
+  runtime.connections.add(connection);
   recordDiagnostic(role, 'data-connection-created', { peerAvailable: !!connection.peer });
   connection.on('open', () => recordDiagnostic(role, 'data-channel-open'));
   connection.on('close', () => {
+    runtime.connections.delete(connection);
     recordDiagnostic(role, 'data-channel-close');
     void snapshotConnection(connection, role);
   });
@@ -113,7 +128,16 @@ function createCore() {
 function core(kind, id, extra = {}) { runtime.worker.postMessage({ kind, id, ...extra }); }
 function waitPeer(id) {
   return new Promise((resolve, reject) => {
-    const peer = runtime.peerFactory(id);
+    runtime.turnCredentials.get().then((turnState) => {
+      runtime.turnState = turnState;
+      recordDiagnostic('turn', turnState.turnAvailable ? 'credentials-ready' : 'credentials-unavailable', {
+        turnAvailable: turnState.turnAvailable,
+        iceServerCount: turnState.iceServers.length,
+        reason: turnState.reason,
+        expiresInMs: turnState.turnAvailable ? Math.max(0, turnState.expiresAt - Date.now()) : 0,
+      });
+      const peerConfig = { ...PEER_CONFIG, iceServers: turnState.iceServers };
+      const peer = runtime.peerFactory(id, peerConfig);
     recordDiagnostic('peer', 'signal-connecting');
     const timer = setTimeout(() => fail(Object.assign(new Error('联机信令连接超时；单人游玩仍可使用'), { type: 'network' })), SIGNAL_TIMEOUT_MS);
     const fail = (error) => {
@@ -132,6 +156,7 @@ function waitPeer(id) {
       });
       resolve(peer);
     });
+    }).catch((error) => reject(error));
   });
 }
 function channelSend(connection, message) {
@@ -256,7 +281,7 @@ export class PagesSocket {
       runtime.mode = 'local'; runtime.code = null; identity.clearToken();
     }
     const diagnostics = this.channel ? await snapshotConnection(this.channel, 'guest') : {};
-    const message = peerFailureMessage(error, diagnostics);
+    const message = peerFailureMessage(error, diagnostics, runtime.turnState);
     if (remoteAttempt && runtime.failure) runtime.failure.message = message;
     this.onerror?.(error);
     this.finish(1006, error.message || '联机连接失败');

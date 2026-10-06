@@ -37,6 +37,8 @@
     "launch": "node scripts/launch.mjs",
     "pages:build": "node tools/pages-build.mjs",
     "pages:assets": "node tools/pages-assets.mjs",
+    "turn:space:test": "python -m unittest discover -s turn-space/tests -v",
+    "turn:space:deploy": "py -3.12 tools/deploy-turn-space.py",
     "pages:test": "node --test test/pages.test.js",
     "pages:check": "node tools/pages-check.mjs"
   },

@@ -7,6 +7,7 @@ import { APP_VERSION, PROTOCOL_VERSION } from '../shared/constants.js';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const DEFAULT_BASE = '/Stronghold-Protocol/';
+export const DEFAULT_TURN_CREDENTIALS_URL = 'https://fuhuaaaa-stronghold-turn-credentials.hf.space/credentials';
 const hash = (data) => createHash('sha256').update(data).digest('hex');
 export async function walk(dir) {
   const out = [];
@@ -56,7 +57,9 @@ export async function buildPages({ assetRoot = path.join(ROOT, '.cache/pages-ass
   const required = [...resourcePaths(standard), ...resourcePaths(local)];
   for (const url of required) await fs.access(path.join(assetRoot, 'public', url));
   const dataFiles = (await fs.readdir(path.join(ROOT, 'data'))).filter((f) => f.endsWith('.json') && !f.includes('assets')).sort().map((f) => f.slice(0, -5));
-  const config = { app: APP_VERSION, protocol: PROTOCOL_VERSION, compat: await behaviorFingerprint(), base, dataFiles };
+  const turnCredentialsUrl = process.env.PAGES_TURN_CREDENTIALS_URL || DEFAULT_TURN_CREDENTIALS_URL;
+  if (!/^https:\/\/[A-Za-z0-9.-]+(?::443)?\/credentials$/.test(turnCredentialsUrl)) throw new Error('TURN credentials URL must be an HTTPS /credentials endpoint');
+  const config = { app: APP_VERSION, protocol: PROTOCOL_VERSION, compat: await behaviorFingerprint(), base, dataFiles, turnCredentialsUrl };
   await fs.rm(out, { recursive: true, force: true });
   await fs.mkdir(out, { recursive: true });
   for (const dir of ['css', 'vendor']) await fs.cp(path.join(ROOT, 'public', dir), path.join(out, dir), { recursive: true });
@@ -117,6 +120,7 @@ export async function buildPages({ assetRoot = path.join(ROOT, '.cache/pages-ass
   for (const target of ['js/main.js', 'pages-worker.js']) {
     const source = await fs.readFile(path.join(out, target), 'utf8');
     if (/\b(?:from\s*|import\s*\()\s*["']node:/.test(source)) throw new Error(`Node dependency survived in ${target}`);
+    if (/HF_TOKEN|Authorization\s*:\s*["']Bearer|turn\.fastrtc\.org/i.test(source)) throw new Error(`TURN server secret or upstream API leaked into ${target}`);
   }
   for (const name of ['LICENSE', 'NOTICE.md', 'THIRD-PARTY-NOTICES.md']) await fs.copyFile(path.join(ROOT, name), path.join(out, name));
   await fs.writeFile(path.join(out, '.nojekyll'), '');
