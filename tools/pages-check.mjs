@@ -32,12 +32,12 @@ const record = async (name, fn) => {
   try { await fn(); console.log('PASS', name); }
   catch (error) { failures.push({ name, message: error.stack }); console.error('FAIL', name, error.message); }
 };
-async function page(name) {
+async function page(name, target = url) {
   const context = await browser.createBrowserContext();
   const p = await context.newPage();
   p.on('pageerror', (e) => { pageErrors.push({ name, message: e.message }); console.error('PAGE ERROR', name, e.message); });
   await p.setViewport({ width: 1280, height: 720 });
-  await p.goto(url, { waitUntil: 'domcontentloaded' });
+  await p.goto(target, { waitUntil: 'domcontentloaded' });
   await p.waitForFunction(() => !!window.__SP__, { timeout: 45000 });
   await p.waitForFunction(() => window.__SP__.net.status === 'connected', { timeout: 45000 });
   await p.evaluate((port) => {
@@ -76,12 +76,20 @@ try {
     await solo.screenshot({ path: path.join(shots, 'solo.png') });
   });
   await record('PeerJS create/join, version gate and actual WebRTC messages', async () => {
-    host = await page('host'); guest = await page('guest');
-    await enter(host, 'HostTest'); await enter(guest, 'GuestTest');
+    host = await page('host');
+    await enter(host, 'HostTest');
     await host.evaluate(() => window.__SP__.net.request('room.create', { mode: 'coop', difficulty: 'FUNNY' }));
     const code = await host.evaluate(() => window.__SP__.store.get().room.code);
     assert.match(code, /^[A-Z]{4}$/);
-    await guest.evaluate((code) => window.__SP__.net.request('room.join', { code }), code);
+    await host.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text) => { window.__testInvite = text; } } }));
+    const inviteButtons = await host.$$('.invite__btns button');
+    await inviteButtons[1].click();
+    await host.waitForFunction(() => !!window.__testInvite);
+    const invite = await host.evaluate(() => window.__testInvite.split(' ')[0]);
+    assert.equal(new URL(invite).pathname, DEFAULT_BASE);
+    assert.equal(new URL(invite).searchParams.get('room'), code);
+    guest = await page('guest', invite);
+    await enter(guest, 'GuestTest');
     await host.waitForFunction(() => window.__SP__.store.get().room?.seats.filter((s) => s && !s.isBot).length === 2);
     assert.equal(await guest.evaluate(() => window.__SP__.store.get().room.code), code);
     const wrongVersion = await guest.evaluate(async () => {
@@ -124,6 +132,12 @@ try {
     assert.equal(pageErrors.length, 0, JSON.stringify(pageErrors));
     assert.equal(missing.length, 0, JSON.stringify(missing.slice(0, 10)));
     assert.equal(requests.some((s) => /\/(?:healthz|ws|sp-remote|connect\/probe)$/.test(s)), false);
+  });
+  await record('closing the host ends its room without host migration', async () => {
+    await host.close();
+    await guest.waitForFunction(() => !window.__SP__.store.get().room && window.__SP_PAGES__.runtime.mode === 'local', { timeout: 45000 });
+    await guest.waitForFunction(() => window.__SP__.net.status === 'online', { timeout: 30000 });
+    assert.equal(await guest.evaluate(() => window.__SP_PAGES__.runtime.host), null);
   });
 } finally {
   await fs.writeFile(path.join(ROOT, 'outputs/pages-check.json'), JSON.stringify({ url, failures, pageErrors, missing, requests: requests.length, completedAt: new Date().toISOString() }, null, 2));
