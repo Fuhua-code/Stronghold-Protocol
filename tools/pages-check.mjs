@@ -52,7 +52,7 @@ async function enter(p, name) {
   await p.waitForSelector('.lobby-screen');
   await p.waitForFunction(() => window.__SP__.net.status === 'online');
 }
-let host, guest, solo;
+let host, guest, solo, failedJoin;
 try {
   await record('original title and local core without server endpoints', async () => {
     solo = await page('solo');
@@ -118,6 +118,27 @@ try {
     await guest.evaluate(() => window.__SP__.net.reconnectNow());
     await guest.waitForFunction(() => window.__SP__.net.status === 'online');
     assert.equal(await guest.evaluate(() => window.__SP__.net.playerId), id);
+  });
+  await record('unavailable PeerJS room does not appear as server shutdown or disturb a live room', async () => {
+    failedJoin = await page('failed join');
+    await enter(failedJoin, 'FailedJoin');
+    await failedJoin.evaluate(() => {
+      window.__testRoomClosed = 0;
+      window.__SP__.net.on('room.closed', () => { window.__testRoomClosed++; });
+    });
+    const outcome = await failedJoin.evaluate(async () => {
+      try {
+        await window.__SP__.net.request('room.join', { code: 'ZZZZ' });
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, message: error.message };
+      }
+    });
+    assert.equal(outcome.ok, false);
+    assert.match(outcome.message, /没有找到.*在线房主/);
+    assert.equal(await failedJoin.evaluate(() => window.__testRoomClosed), 0);
+    assert.equal(await failedJoin.evaluate(() => window.__SP_PAGES__.runtime.mode), 'local');
+    assert.equal(await host.evaluate(() => window.__SP__.store.get().room?.code), await host.evaluate(() => window.__SP_PAGES__.runtime.code));
   });
   await record('complete assets and browser simulation import at project subpath', async () => {
     const result = await solo.evaluate(async () => {

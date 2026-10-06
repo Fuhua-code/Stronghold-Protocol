@@ -1,13 +1,94 @@
 import { Peer } from 'peerjs';
 import config from '#pages-config';
 import { WIRE, sameBuild, peerId } from './compat.js';
+import { PEER_CONFIG, peerFailureMessage, summarizeIceStats } from './peer-config.js';
 
-const CONNECT_MS = 12000;
+const SIGNAL_TIMEOUT_MS = 12000;
+const DIRECT_TIMEOUT_MS = 30000;
+const SELECT_TIMEOUT_MS = SIGNAL_TIMEOUT_MS + DIRECT_TIMEOUT_MS + 1000;
 const MAX_BUFFER = 16 * 1024 * 1024;
+const MAX_DIAGNOSTICS = 100;
 const metadata = { wire: WIRE, app: config.app, protocol: config.protocol, compat: config.compat };
-const ice = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] };
-const runtime = { mode: 'local', code: null, worker: null, ports: new Map(), host: null, peerFactory: (id) => new Peer(id, { secure: true, config: ice }) };
+// Use independent STUN providers so a single blocked UDP endpoint does not make a room unreachable.
+// Pages remains relay-free: a network that cannot form a direct WebRTC candidate still needs TURN.
+const runtime = { mode: 'local', code: null, worker: null, ports: new Map(), host: null, failure: null, diagnostics: [], peerFactory: (id) => new Peer(id, { secure: true, config: PEER_CONFIG }) };
 let net, identity, sequence = 0;
+
+function recordDiagnostic(role, event, details = {}) {
+  const entry = { at: new Date().toISOString(), role, event, ...details };
+  runtime.diagnostics.push(entry);
+  if (runtime.diagnostics.length > MAX_DIAGNOSTICS) runtime.diagnostics.splice(0, runtime.diagnostics.length - MAX_DIAGNOSTICS);
+  console.info('[pages peer]', role, event, details);
+  return entry;
+}
+
+function snapshotConnection(connection, role) {
+  const pc = connection?.peerConnection;
+  if (!pc) {
+    const summary = { dataChannelOpen: !!connection?.open, localCandidateTypes: [], remoteCandidateTypes: [], pairs: [], remoteDescription: false };
+    recordDiagnostic(role, 'peer-connection-unavailable', summary);
+    return Promise.resolve(summary);
+  }
+  const state = {
+    iceGatheringState: pc.iceGatheringState,
+    iceConnectionState: pc.iceConnectionState,
+    connectionState: pc.connectionState,
+    remoteDescription: !!pc.remoteDescription,
+  };
+  let timer;
+  const stats = Promise.race([
+    Promise.resolve().then(() => pc.getStats()),
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('ICE stats timeout')), 1500); }),
+  ]);
+  return stats.then((report) => {
+    const summary = { ...state, ...summarizeIceStats(report) };
+    recordDiagnostic(role, 'ice-summary', summary);
+    return summary;
+  }).catch(() => ({ ...state, localCandidateTypes: [], remoteCandidateTypes: [], pairs: [] })).finally(() => clearTimeout(timer));
+}
+
+function watchDataConnection(connection, role) {
+  recordDiagnostic(role, 'data-connection-created', { peerAvailable: !!connection.peer });
+  connection.on('open', () => recordDiagnostic(role, 'data-channel-open'));
+  connection.on('close', () => {
+    recordDiagnostic(role, 'data-channel-close');
+    void snapshotConnection(connection, role);
+  });
+  connection.on('error', (error) => recordDiagnostic(role, 'connection-error', {
+    type: error?.type || null,
+  }));
+
+  let attached = null;
+  const attach = () => {
+    const pc = connection.peerConnection;
+    if (!pc || pc === attached) return;
+    attached = pc;
+    pc.addEventListener('icecandidate', ({ candidate }) => {
+      if (candidate) recordDiagnostic(role, 'ice-candidate', { type: candidate.type, protocol: candidate.protocol });
+      else recordDiagnostic(role, 'ice-gathering-complete');
+    });
+    pc.addEventListener('icecandidateerror', (event) => recordDiagnostic(role, 'ice-candidate-error', {
+      url: event.url || null,
+      errorCode: event.errorCode || null,
+      errorText: String(event.errorText || '').slice(0, 160),
+    }));
+    for (const [event, state] of [
+      ['icegatheringstatechange', () => pc.iceGatheringState],
+      ['iceconnectionstatechange', () => pc.iceConnectionState],
+      ['connectionstatechange', () => pc.connectionState],
+      ['signalingstatechange', () => pc.signalingState],
+    ]) pc.addEventListener(event, () => {
+      const value = state();
+      recordDiagnostic(role, event, { state: value });
+      if (value === 'failed' || value === 'closed') void snapshotConnection(connection, role);
+    });
+    recordDiagnostic(role, 'peer-connection-created');
+  };
+  const poll = setInterval(attach, 100);
+  const stop = setTimeout(() => clearInterval(poll), DIRECT_TIMEOUT_MS);
+  connection.on('open', () => { clearInterval(poll); clearTimeout(stop); attach(); });
+  connection.on('close', () => { clearInterval(poll); clearTimeout(stop); attach(); });
+}
 
 function createCore() {
   if (runtime.ready) return runtime.ready;
@@ -33,13 +114,22 @@ function core(kind, id, extra = {}) { runtime.worker.postMessage({ kind, id, ...
 function waitPeer(id) {
   return new Promise((resolve, reject) => {
     const peer = runtime.peerFactory(id);
-    const timer = setTimeout(() => fail(new Error('联机信令连接超时；单人游玩仍可使用')), CONNECT_MS);
-    const fail = (error) => { clearTimeout(timer); peer.destroy(); reject(error); };
+    recordDiagnostic('peer', 'signal-connecting');
+    const timer = setTimeout(() => fail(Object.assign(new Error('联机信令连接超时；单人游玩仍可使用'), { type: 'network' })), SIGNAL_TIMEOUT_MS);
+    const fail = (error) => {
+      clearTimeout(timer);
+      recordDiagnostic('peer', 'signal-error', { type: error?.type || null });
+      peer.destroy(); reject(error);
+    };
     peer.once('error', fail);
     peer.once('open', () => {
       clearTimeout(timer); peer.off('error', fail);
-      peer.on('error', (error) => console.warn('[pages peer]', error.type));
-      peer.on('disconnected', () => { if (!peer.destroyed) peer.reconnect(); });
+      recordDiagnostic('peer', 'signal-open');
+      peer.on('error', (error) => recordDiagnostic('peer', 'signal-error', { type: error?.type || null }));
+      peer.on('disconnected', () => {
+        recordDiagnostic('peer', 'signal-disconnected');
+        if (!peer.destroyed) peer.reconnect();
+      });
       resolve(peer);
     });
   });
@@ -50,13 +140,14 @@ function channelSend(connection, message) {
   connection.send(message);
 }
 function acceptGuest(connection) {
+  watchDataConnection(connection, 'host');
   if (runtime.ports.size >= 12 || !sameBuild(metadata, connection.metadata)) {
     connection.on('open', () => { connection.send({ kind: 'reject', reason: '版本不兼容或同盟连接已满，请刷新页面后重试' }); setTimeout(() => connection.close(), 100); });
     return;
   }
   const id = `guest-${++sequence}`;
   let admitted = false;
-  const timer = setTimeout(() => connection.close(), CONNECT_MS);
+  const timer = setTimeout(() => connection.close(), SELECT_TIMEOUT_MS);
   connection.on('data', (message) => {
     if (!admitted) {
       if (message?.kind !== 'offer' || !sameBuild(metadata, message.build)) {
@@ -76,7 +167,10 @@ function acceptGuest(connection) {
     else if (message?.kind === 'close') core('close', id, message);
   });
   connection.on('close', () => { clearTimeout(timer); if (admitted) core('close', id); });
-  connection.on('error', () => connection.close());
+  connection.on('error', (error) => {
+    recordDiagnostic('host', 'guest-error', { type: error?.type || null });
+    connection.close();
+  });
 }
 async function publishRoom() {
   runtime.host?.destroy(); runtime.host = null;
@@ -115,9 +209,14 @@ export class PagesSocket {
     const peer = await waitPeer();
     this.peer = peer;
     if (this.readyState === 3) { peer.destroy(); return; }
+    peer.on('error', (error) => {
+      recordDiagnostic('guest', 'peer-error', { type: error?.type || null });
+      if (this.readyState === 0) this.fail(error);
+    });
     const connection = peer.connect(peerId(targetCode), { reliable: true, serialization: 'json', metadata });
     this.channel = connection;
-    this.timer = setTimeout(() => this.fail(new Error('未能连接房主；请确认密钥和网络，房主需保持页面开启')), CONNECT_MS);
+    watchDataConnection(connection, 'guest');
+    this.timer = setTimeout(() => this.fail(Object.assign(new Error('WebRTC 直连等待超时'), { type: 'webrtc-timeout' })), DIRECT_TIMEOUT_MS);
     connection.on('open', () => channelSend(connection, { kind: 'offer', build: metadata }));
     connection.on('data', (message) => {
       if (message?.kind === 'accepted') {
@@ -129,7 +228,9 @@ export class PagesSocket {
       else if (message?.kind === 'ping') channelSend(connection, { kind: 'pong' });
       else if (message?.kind === 'close') this.finish(message.code, message.reason);
     });
-    connection.on('close', () => this.finish(1006, '房主连接中断'));
+    connection.on('close', () => {
+      if (this.readyState !== 3) this.fail(Object.assign(new Error('WebRTC 数据通道已关闭'), { type: 'webrtc' }));
+    });
     connection.on('error', (error) => this.fail(error));
   }
   opened() { if (this.readyState === 3) return; this.readyState = 1; this.onopen?.({}); }
@@ -145,13 +246,19 @@ export class PagesSocket {
     else if (runtime.ports.has(this.id)) core('close', this.id, { code, reason });
     this.finish(code, reason);
   }
-  fail(error) {
+  async fail(error) {
+    if (this.readyState === 3 || this.failing) return;
+    this.failing = true;
     this.failure = error;
-    this.onerror?.(error);
-    if (runtime.mode === 'remote' && this.readyState === 0) {
-      this.message(JSON.stringify({ t: 'room.closed', reason: 'shutdown' }));
+    const remoteAttempt = runtime.mode === 'remote' && this.readyState === 0;
+    if (remoteAttempt) {
+      runtime.failure = new Error(peerFailureMessage(error));
       runtime.mode = 'local'; runtime.code = null; identity.clearToken();
     }
+    const diagnostics = this.channel ? await snapshotConnection(this.channel, 'guest') : {};
+    const message = peerFailureMessage(error, diagnostics);
+    if (remoteAttempt && runtime.failure) runtime.failure.message = message;
+    this.onerror?.(error);
     this.finish(1006, error.message || '联机连接失败');
   }
   finish(code = 1000, reason = '') {
@@ -165,16 +272,25 @@ export class PagesSocket {
 function waitOnline() {
   if (net.status === 'online') return Promise.resolve();
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { off(); reject(new Error('连接超时，请确认房主在线、密钥正确且网络允许 WebRTC 连接')); }, CONNECT_MS * 2 + 1000);
-    const off = net.on('status', (state) => { if (state.status === 'online') { clearTimeout(timer); off(); resolve(); } });
+    const timer = setTimeout(() => { off(); reject(new Error('连接超时；请确认房主在线且网络允许 WebRTC 直连')); }, SELECT_TIMEOUT_MS);
+    const off = net.on('status', (state) => {
+      if (runtime.failure) { clearTimeout(timer); off(); reject(runtime.failure); }
+      else if (state.status === 'online') { clearTimeout(timer); off(); resolve(); }
+    });
   });
 }
 async function select(mode, code = null) {
   net.close();
   runtime.host?.destroy(); runtime.host = null;
+  runtime.failure = null;
   runtime.mode = mode; runtime.code = code;
   identity.clearToken(); net.url = 'pages:local'; net.connect();
   await waitOnline();
+  if (runtime.failure) {
+    const failure = runtime.failure;
+    runtime.failure = null;
+    throw failure;
+  }
   if (runtime.mode !== mode) throw new Error('无法加入同盟，请核对密钥和网络');
 }
 export function installPages(client, persistence) {
