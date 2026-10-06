@@ -34,7 +34,8 @@ jobs:
       - run: npm run pages:test
       - name: Build Pages site with public TURN endpoint
         env:
-          PAGES_TURN_CREDENTIALS_URL: https://fuhuaaaa-stronghold-turn-credentials.hf.space/credentials
+          # Repository variable only; the Node server keeps the Cloudflare long-lived credentials.
+          PAGES_TURN_CREDENTIALS_URL: ${{ vars.PAGES_TURN_CREDENTIALS_URL }}
         run: npm run pages:build
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4

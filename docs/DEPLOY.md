@@ -3,6 +3,19 @@
 目标：在一台家用 Windows 小主机上长期开服，让朋友通过局域网或公网来玩。macOS / Linux / Docker 放在后面。
 所有命令都在项目根目录执行。遇到问题先运行 `node tools/doctor.mjs`（只读诊断）。
 
+## 0.1 Cloudflare TURN（可选）
+
+Pages 的浏览器不能保存 Cloudflare TURN 长期凭据。启用中继时，让这台 Node 服务通过受信任的 HTTPS 反向代理暴露 `/turn/credentials`，并在服务进程环境中设置：
+
+```text
+CLOUDFLARE_TURN_API_TOKEN=<Cloudflare TURN API token>
+CLOUDFLARE_TURN_KEY_ID=<Cloudflare TURN key ID>
+```
+
+也兼容已有系统变量 `Cloudflare_Turn_API`（API token）和 `Turn_Token`（TURN key ID）。服务只向 Cloudflare 请求 5–30 分钟的临时 `iceServers`，响应不缓存、不记录凭据；没有这两项变量时游戏服务器仍可正常启动，只是不提供 TURN broker。
+
+Pages 构建时通过环境变量 `PAGES_TURN_CREDENTIALS_URL=https://<域名>/turn/credentials` 注入接口地址。该地址不能写入长期密钥，也不要把 API token 放入 GitHub Pages、浏览器或日志。反向代理必须使用受信任证书并转发普通 HTTPS 请求；WebSocket 仍由原 `/ws` 路由负责。
+
 ## 0. 资源需求
 
 | 项目 | 说明 |
