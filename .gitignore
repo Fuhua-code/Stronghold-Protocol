@@ -33,6 +33,8 @@ scripts/service.env.cmd
 .DS_Store
 Thumbs.db
 desktop.ini
+pages-dist/
+outputs/
 *.swp
 .idea/
 .vscode/

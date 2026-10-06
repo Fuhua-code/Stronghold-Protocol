@@ -34,13 +34,18 @@
     "postinstall": "node tools/vendor.mjs",
     "setup": "node tools/setup.mjs",
     "doctor": "node tools/doctor.mjs",
-    "launch": "node scripts/launch.mjs"
+    "launch": "node scripts/launch.mjs",
+    "pages:build": "node tools/pages-build.mjs",
+    "pages:assets": "node tools/pages-assets.mjs",
+    "pages:test": "node --test test/pages.test.js",
+    "pages:check": "node tools/pages-check.mjs"
   },
   "engines": {
     "node": ">=22"
   },
   "dependencies": {
     "htm": "^3.1.1",
+    "peerjs": "1.5.5",
     "pixi-spine": "^4.0.6",
     "pixi.js": "^7.4.2",
     "preact": "^10.29.8",
@@ -48,6 +53,8 @@
     "ws": "^8.22.0"
   },
   "devDependencies": {
+    "esbuild": "0.28.2",
+    "peer": "1.0.2",
     "puppeteer-core": "^25.12.0"
   }
 }
