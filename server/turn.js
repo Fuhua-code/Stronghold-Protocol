@@ -9,7 +9,7 @@ import {
   createTurnRateLimiter,
   parseTurnTtl,
   normalizeIceServers,
-} from './turn-core.js';
+} from '../vercel-turn-broker/turn-core.js';
 
 export {
   TURN_DEFAULT_TTL,
@@ -18,7 +18,7 @@ export {
   normalizeIceServers,
   parseTurnTtl,
   readTurnConfig,
-} from './turn-core.js';
+} from '../vercel-turn-broker/turn-core.js';
 
 function jsonBytes(value) {
   return Buffer.from(JSON.stringify(value));

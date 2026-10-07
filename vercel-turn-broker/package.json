@@ -1,0 +1,9 @@
+{
+  "name": "stronghold-turn-broker",
+  "version": "0.1.4",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "22.x"
+  }
+}

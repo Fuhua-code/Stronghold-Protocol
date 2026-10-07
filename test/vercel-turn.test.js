@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createVercelHandler } from '../api/turn/credentials.js';
-import { createHealthHandler } from '../api/turn/healthz.js';
+import { createVercelHandler } from '../vercel-turn-broker/api/turn/credentials.js';
+import { createHealthHandler } from '../vercel-turn-broker/api/turn/healthz.js';
 
 const ORIGIN = 'https://fuhua-code.github.io';
 const env = { CLOUDFLARE_TURN_API_TOKEN: 'private-api-token', CLOUDFLARE_TURN_KEY_ID: 'private-key-id' };

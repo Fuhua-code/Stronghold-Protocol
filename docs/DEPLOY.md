@@ -5,7 +5,7 @@
 
 ## 0.1 Cloudflare TURN（Pages 可选）
 
-Pages 浏览器不能保存 Cloudflare TURN 长期凭据。推荐用独立 Vercel 项目托管无状态 TURN 凭据接口；它只负责获取临时 WebRTC 凭据，不运行游戏服务器、房间或 WebSocket。Vercel Project Settings 中将 Node.js Version 设为 22.x，并设置：
+Pages 浏览器不能保存 Cloudflare TURN 长期凭据。推荐用独立 Vercel 项目托管无状态 TURN 凭据接口；它只负责获取临时 WebRTC 凭据，不运行游戏服务器、房间或 WebSocket。通过 Vercel 网页导入 GitHub 仓库 `Fuhua-code/Stronghold-Protocol` 后，将 **Root Directory** 设为 `vercel-turn-broker`，并确保所选分支包含该目录。Vercel Project Settings 中将 Node.js Version 设为 22.x，并设置：
 
 ```text
 CLOUDFLARE_TURN_API_TOKEN=<Cloudflare TURN API token>

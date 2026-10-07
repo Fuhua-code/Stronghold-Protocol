@@ -1,6 +1,6 @@
 // Vercel Node Function: non-secret deployment health check for the TURN broker.
 
-import { readTurnConfig, TURN_DEFAULT_TTL, TURN_MAX_TTL, TURN_MIN_TTL } from '../../server/turn-core.js';
+import { readTurnConfig, TURN_DEFAULT_TTL, TURN_MAX_TTL, TURN_MIN_TTL } from '../../turn-core.js';
 
 function sendJson(res, status, value) {
   res.writeHead(status, {

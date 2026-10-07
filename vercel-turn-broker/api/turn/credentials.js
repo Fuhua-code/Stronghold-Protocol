@@ -9,7 +9,7 @@ import {
   createTurnGenerator,
   createTurnRateLimiter,
   parseTurnTtl,
-} from '../../server/turn-core.js';
+} from '../../turn-core.js';
 
 function header(req, name) {
   const value = req.headers?.[name.toLowerCase()] ?? req.headers?.[name];
