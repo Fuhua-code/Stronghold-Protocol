@@ -3,18 +3,22 @@
 目标：在一台家用 Windows 小主机上长期开服，让朋友通过局域网或公网来玩。macOS / Linux / Docker 放在后面。
 所有命令都在项目根目录执行。遇到问题先运行 `node tools/doctor.mjs`（只读诊断）。
 
-## 0.1 Cloudflare TURN（可选）
+## 0.1 Cloudflare TURN（Pages 可选）
 
-Pages 的浏览器不能保存 Cloudflare TURN 长期凭据。启用中继时，让这台 Node 服务通过受信任的 HTTPS 反向代理暴露 `/turn/credentials`，并在服务进程环境中设置：
+Pages 浏览器不能保存 Cloudflare TURN 长期凭据。推荐用独立 Vercel 项目托管无状态 TURN 凭据接口；它只负责获取临时 WebRTC 凭据，不运行游戏服务器、房间或 WebSocket。Vercel Project Settings 中将 Node.js Version 设为 22.x，并设置：
 
 ```text
 CLOUDFLARE_TURN_API_TOKEN=<Cloudflare TURN API token>
 CLOUDFLARE_TURN_KEY_ID=<Cloudflare TURN key ID>
 ```
 
-也兼容已有系统变量 `Cloudflare_Turn_API`（API token）和 `Turn_Token`（TURN key ID）。服务只向 Cloudflare 请求 5–30 分钟的临时 `iceServers`，响应不缓存、不记录凭据；没有这两项变量时游戏服务器仍可正常启动，只是不提供 TURN broker。
+另设置 `TURN_ALLOWED_ORIGINS=https://fuhua-code.github.io`。可用逗号分隔值添加明确的预览或自定义域。服务只向 Cloudflare 请求 5–30 分钟的临时 `iceServers`，响应不缓存、不记录凭据。Vercel 项目应限制 Cloudflare API Token 权限到 TURN 凭据生成所需范围。
 
-Pages 构建时通过环境变量 `PAGES_TURN_CREDENTIALS_URL=https://<域名>/turn/credentials` 注入接口地址。该地址不能写入长期密钥，也不要把 API token 放入 GitHub Pages、浏览器或日志。反向代理必须使用受信任证书并转发普通 HTTPS 请求；WebSocket 仍由原 `/ws` 路由负责。
+部署 Vercel Functions 后检查 `https://<vercel-project>.vercel.app/api/turn/healthz`，再将 `PAGES_TURN_CREDENTIALS_URL=https://<vercel-project>.vercel.app/api/turn/credentials` 作为 GitHub 仓库 Actions Variable 设置。该公开 URL 不含密钥；Cloudflare API Token 只设置在 Vercel Environment Variables，不要放入 GitHub Actions、浏览器、源码或日志。Node 游戏服务仍使用自身 `/ws`；Vercel 不承载游戏连接。未配置 Pages broker 时，网页保持 STUN-only，单人模式不受影响。
+
+凭据接口使用实例内存做按来源地址限流；Vercel 是无状态平台，因此该限制是每个运行实例各自生效，不是全局配额。当前不需要额外 KV 服务；若将来需要强制全局额度，再接入持久化限流存储。
+
+当前 Node 游戏服务器仍保留兼容用 `/turn/credentials` 接口，可通过受信任 HTTPS 反向代理提供给自行构建的客户端。Node 运行环境也兼容系统变量 `Cloudflare_Turn_API` 和 `Turn_Token`；Vercel 部署仅使用上方标准变量名。
 
 ## 0. 资源需求
 

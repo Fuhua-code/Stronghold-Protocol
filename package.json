@@ -38,7 +38,8 @@
     "pages:build": "node tools/pages-build.mjs",
     "pages:assets": "node tools/pages-assets.mjs",
     "pages:test": "node --test test/pages.test.js",
-    "pages:check": "node tools/pages-check.mjs"
+    "pages:check": "node tools/pages-check.mjs",
+    "vercel:turn:test": "node --test test/vercel-turn.test.js"
   },
   "engines": {
     "node": ">=22"

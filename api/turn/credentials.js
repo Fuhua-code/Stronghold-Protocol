@@ -1,4 +1,5 @@
-// Node HTTP adapter for the shared Cloudflare TURN broker.
+// Vercel Node Function: short-lived Cloudflare TURN credential broker.
+// Long-lived Cloudflare credentials are read only from Vercel environment variables.
 
 import {
   TURN_DEFAULT_TTL,
@@ -8,27 +9,26 @@ import {
   createTurnGenerator,
   createTurnRateLimiter,
   parseTurnTtl,
-  normalizeIceServers,
-} from './turn-core.js';
+} from '../../server/turn-core.js';
 
-export {
-  TURN_DEFAULT_TTL,
-  TURN_MAX_TTL,
-  TURN_MIN_TTL,
-  normalizeIceServers,
-  parseTurnTtl,
-  readTurnConfig,
-} from './turn-core.js';
+function header(req, name) {
+  const value = req.headers?.[name.toLowerCase()] ?? req.headers?.[name];
+  return Array.isArray(value) ? value[0] : value;
+}
 
-function jsonBytes(value) {
-  return Buffer.from(JSON.stringify(value));
+function requestKey(req) {
+  if (req.ip) return req.ip;
+  const realIp = header(req, 'x-real-ip');
+  if (typeof realIp === 'string' && realIp) return realIp;
+  const forwarded = header(req, 'x-forwarded-for');
+  if (typeof forwarded === 'string' && forwarded) return forwarded.split(',').at(-1).trim();
+  return req.socket?.remoteAddress || '?';
 }
 
 function sendJson(res, status, value, origin = null, extra = {}) {
-  const body = jsonBytes(value);
+  const body = JSON.stringify(value);
   const headers = {
     'Content-Type': 'application/json; charset=utf-8',
-    'Content-Length': body.length,
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
     ...extra,
@@ -53,23 +53,14 @@ function sendOptions(res, origin) {
   res.end();
 }
 
-/**
- * Create the request handler used by server/index.js. The fetch and clock are injectable for tests.
- * @param {{ env?: Record<string, string | undefined>, fetchImpl?: typeof fetch, now?: () => number,
- *           timeoutMs?: number, clientKey?: (req: import('node:http').IncomingMessage) => string }} [opts]
- */
-export function createTurnBroker(opts = {}) {
+export function createVercelHandler(opts = {}) {
   const generator = createTurnGenerator(opts);
   const config = generator.config;
   const now = opts.now || Date.now;
-  const limited = createTurnRateLimiter({ now, keyFn: opts.clientKey || ((req) => req.socket?.remoteAddress || '?') });
+  const limited = createTurnRateLimiter({ now, keyFn: requestKey });
 
-  function originFor(req) {
-    return allowedOrigin(config, req.headers?.origin);
-  }
-
-  async function handle(req, res) {
-    const origin = originFor(req);
+  return async function vercelTurnHandler(req, res) {
+    const origin = allowedOrigin(config, header(req, 'origin'));
     if (req.method === 'OPTIONS') {
       if (!origin) sendJson(res, 403, { error: 'origin_not_allowed' });
       else sendOptions(res, origin);
@@ -89,10 +80,12 @@ export function createTurnBroker(opts = {}) {
     }
     let ttl = TURN_DEFAULT_TTL;
     try {
-      const url = new URL(req.url || '/', 'http://localhost');
+      const url = new URL(req.url || '/', 'https://vercel.invalid');
       const raw = url.searchParams.get('ttl');
       if (raw !== null) ttl = parseTurnTtl(raw);
-    } catch { ttl = null; }
+    } catch {
+      ttl = null;
+    }
     if (ttl === null) {
       sendJson(res, 400, { error: 'invalid_ttl', min: TURN_MIN_TTL, max: TURN_MAX_TTL }, origin);
       return;
@@ -102,7 +95,7 @@ export function createTurnBroker(opts = {}) {
     } catch {
       sendJson(res, 503, { error: 'turn_unavailable' }, origin);
     }
-  }
-
-  return { config, handle, generate: generator.generate };
+  };
 }
+
+export default createVercelHandler();

@@ -1,0 +1,10 @@
+{
+  "functions": {
+    "api/turn/credentials.js": {
+      "maxDuration": 10
+    },
+    "api/turn/healthz.js": {
+      "maxDuration": 10
+    }
+  }
+}

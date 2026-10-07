@@ -7,8 +7,15 @@ import { APP_VERSION, PROTOCOL_VERSION } from '../shared/constants.js';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const DEFAULT_BASE = '/Stronghold-Protocol/';
-// Pages can run without a broker; a public Node server is injected at build time when TURN is enabled.
+// Pages can run without a broker; a public Node or Vercel broker is injected at build time when TURN is enabled.
 export const DEFAULT_TURN_CREDENTIALS_URL = '';
+export const TURN_CREDENTIAL_PATHS = new Set(['/turn/credentials', '/api/turn/credentials']);
+export function isTurnCredentialsUrl(value) {
+  let parsed;
+  try { parsed = new URL(value); } catch { return false; }
+  return parsed.protocol === 'https:' && !parsed.username && !parsed.password && !parsed.hash
+    && !parsed.search && TURN_CREDENTIAL_PATHS.has(parsed.pathname);
+}
 const hash = (data) => createHash('sha256').update(data).digest('hex');
 export async function walk(dir) {
   const out = [];
@@ -60,12 +67,7 @@ export async function buildPages({ assetRoot = path.join(ROOT, '.cache/pages-ass
   const dataFiles = (await fs.readdir(path.join(ROOT, 'data'))).filter((f) => f.endsWith('.json') && !f.includes('assets')).sort().map((f) => f.slice(0, -5));
   const turnCredentialsUrl = process.env.PAGES_TURN_CREDENTIALS_URL?.trim() || DEFAULT_TURN_CREDENTIALS_URL;
   if (turnCredentialsUrl) {
-    let parsed;
-    try { parsed = new URL(turnCredentialsUrl); } catch { throw new Error('TURN credentials URL must be an HTTPS /turn/credentials endpoint'); }
-    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.hash
-      || parsed.pathname !== '/turn/credentials' || parsed.search) {
-      throw new Error('TURN credentials URL must be an HTTPS /turn/credentials endpoint');
-    }
+    if (!isTurnCredentialsUrl(turnCredentialsUrl)) throw new Error('TURN credentials URL must be an HTTPS /turn/credentials or /api/turn/credentials endpoint');
   }
   const config = { app: APP_VERSION, protocol: PROTOCOL_VERSION, compat: await behaviorFingerprint(), base, dataFiles, turnCredentialsUrl };
   await fs.rm(out, { recursive: true, force: true });

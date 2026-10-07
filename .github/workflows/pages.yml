@@ -34,7 +34,7 @@ jobs:
       - run: npm run pages:test
       - name: Build Pages site with public TURN endpoint
         env:
-          # Repository variable only; the Node server keeps the Cloudflare long-lived credentials.
+          # Public Vercel Function URL only; Cloudflare long-lived credentials stay in Vercel env vars.
           PAGES_TURN_CREDENTIALS_URL: ${{ vars.PAGES_TURN_CREDENTIALS_URL }}
         run: npm run pages:build
       - uses: actions/configure-pages@v5

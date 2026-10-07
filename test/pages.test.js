@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import { rewritePaths, rewriteManifest, resourcePaths, behaviorFingerprint } from '../tools/pages-build.mjs';
+import { rewritePaths, rewriteManifest, resourcePaths, behaviorFingerprint, isTurnCredentialsUrl } from '../tools/pages-build.mjs';
 import { WIRE, sameBuild, peerId } from '../pages/compat.js';
 import { randomBytes, randomInt } from '../pages/adapters/crypto.js';
 import { ICE_SERVERS, PEER_CONFIG, TurnCredentialCache, normalizeTurnPayload, peerFailureMessage, summarizeIceStats } from '../pages/peer-config.js';
@@ -14,6 +14,18 @@ test('Pages paths stay under the project path without rewriting external URLs', 
   assert.equal(rewritePaths('https://host.test/js/main.js', base), 'https://host.test/js/main.js');
   assert.deepEqual(rewriteManifest({ atlas: ['/assets/a.atlas'], other: 'other' }, base), { atlas: ['/Stronghold-Protocol/assets/a.atlas'], other: 'other' });
   assert.deepEqual([...resourcePaths({ a: ['/assets/a.png'], font: '/fonts/a.woff2', external: 'https://host.test/a' })], ['/assets/a.png', '/fonts/a.woff2']);
+});
+test('Pages accepts only secure Node or Vercel TURN credential endpoint URLs', () => {
+  assert.equal(isTurnCredentialsUrl('https://stronghold-turn-broker.vercel.app/api/turn/credentials'), true);
+  assert.equal(isTurnCredentialsUrl('https://turn.example/turn/credentials'), true);
+  for (const value of [
+    'http://stronghold-turn-broker.vercel.app/api/turn/credentials',
+    'https://user:pass@turn.example/turn/credentials',
+    'https://turn.example/api/turn/credentials?debug=1',
+    'https://turn.example/api/turn/healthz',
+    'https://turn.example/other',
+    'not a URL',
+  ]) assert.equal(isTurnCredentialsUrl(value), false, value);
 });
 test('Peer transport rejects application, protocol and behavior incompatibility', () => {
   const expected = { wire: WIRE, app: '0.1.4', protocol: 1, compat: 'abc' };

@@ -20,7 +20,7 @@ English summary: [below](#english).
 
 ## 本分支：GitHub Pages 浏览器版
 
-网站：[单机与 PeerJS 同盟试玩](https://fuhua-code.github.io/Stronghold-Protocol/)。保留原版初始界面，可独立模拟或通过同盟密钥连接房主浏览器，不提供外部游戏服务器入口。完整 3D、美术与音频资源通过版本化 Release 构建输入发布，大文件不提交 Git。Pages 可通过现有 Node 服务器的 TURN broker 使用 Cloudflare 中继；broker 未配置时回退到 STUN-only。部署及构建方式见 [Pages 说明](pages/README.md)。下文 Node 部署说明适用于原始服务器运行方式。
+网站：[单机与 PeerJS 同盟试玩](https://fuhua-code.github.io/Stronghold-Protocol/)。保留原版初始界面，可独立模拟或通过同盟密钥连接房主浏览器，不提供外部游戏服务器入口。完整 3D、美术与音频资源通过版本化 Release 构建输入发布，大文件不提交 Git。Pages 可通过独立 Vercel TURN broker 使用 Cloudflare 中继；broker 未配置时回退到 STUN-only。部署及构建方式见 [Pages 说明](pages/README.md)。下文 Node 部署说明适用于原始服务器运行方式。
 
 | 同盟房间 | 策略轮选 | 休整期（商店 / 盟约） |
 |---|---|---|
