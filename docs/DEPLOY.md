@@ -16,6 +16,8 @@ CLOUDFLARE_TURN_KEY_ID=<Cloudflare TURN key ID>
 
 部署 Vercel Functions 后检查 `https://<vercel-project>.vercel.app/api/turn/healthz`，再将 `PAGES_TURN_CREDENTIALS_URL=https://<vercel-project>.vercel.app/api/turn/credentials` 作为 GitHub 仓库 Actions Variable 设置。该公开 URL 不含密钥；Cloudflare API Token 只设置在 Vercel Environment Variables，不要放入 GitHub Actions、浏览器、源码或日志。Node 游戏服务仍使用自身 `/ws`；Vercel 不承载游戏连接。未配置 Pages broker 时，网页保持 STUN-only，单人模式不受影响。
 
+Pages 构建所需的完整资源包通过 Release `pages-assets-v0.1.4` 提供，工作流按 `pages/resources.json` 中的文件名和 SHA256 固定下载并校验；不要把该大文件提交到 Git。
+
 凭据接口使用实例内存做按来源地址限流；Vercel 是无状态平台，因此该限制是每个运行实例各自生效，不是全局配额。当前不需要额外 KV 服务；若将来需要强制全局额度，再接入持久化限流存储。
 
 当前 Node 游戏服务器仍保留兼容用 `/turn/credentials` 接口，可通过受信任 HTTPS 反向代理提供给自行构建的客户端。Node 运行环境也兼容系统变量 `Cloudflare_Turn_API` 和 `Turn_Token`；Vercel 部署仅使用上方标准变量名。
