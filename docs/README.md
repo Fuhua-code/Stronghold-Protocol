@@ -15,7 +15,7 @@
    $env:PACKAGER_KEY_PASSWORD = '本机别名密码'
    ```
 
-4. 在依赖工作树准备 `public/vendor`、`node_modules/ws` 和已缓存的 Android runtime，然后执行：
+4. 在依赖工作树准备 `public/vendor`、`node_modules/ws`；如果本机还没有 runtime 缓存，准备一个包含 `runtime/`、`termux/`、`licenses/` 的外部目录，然后执行：
 
    ```text
    packager.cmd doctor
