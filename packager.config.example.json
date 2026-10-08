@@ -5,6 +5,7 @@
   "defaultProfile": "connect",
   "defaultAbis": ["arm64-v8a"],
   "toolchainDir": "../.toolchain35",
+  "runtimeSourceDir": "",
   "runtimeCacheDir": "cache/runtime",
   "outputDir": "outputs",
   "packageName": "io.prts.stronghold",

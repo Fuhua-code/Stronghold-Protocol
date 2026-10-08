@@ -10,7 +10,7 @@
 
 ```text
 packager.cmd doctor
-packager.cmd bootstrap
+packager.cmd bootstrap --source <已准备的 runtime/termux/licenses 目录>
 packager.cmd                         # connect + arm64-v8a
 packager.cmd build --profile master
 packager.cmd build --profile connect --abis arm64-v8a,x86_64
@@ -18,7 +18,7 @@ packager.cmd verify --apk <APK绝对路径>
 packager.cmd clean                   # 删除 staging 和 outputs，保留 runtime cache
 ```
 
-`master` profile 不使用远程入口、远程指南、探测接口、代理或独立远程 WebView；`connect` profile 在上游源码上应用版本化远程覆盖层，并使用联机 Android 模板。覆盖层按稳定锚点检查，冲突时停止并保留 staging 目录供诊断。
+`master` profile 不使用远程入口、远程指南、探测接口、代理或独立远程 WebView；`connect` profile 在上游源码上应用版本化远程覆盖层，并使用联机 Android 模板。覆盖层按稳定锚点检查，冲突时停止并保留 staging 目录供诊断。`bootstrap --source` 只读复制已经准备好的 Android runtime 缓存，不调用或修改上游 `mobile/`。
 
 ## 更新上游后的标准流程
 
@@ -43,4 +43,3 @@ ARM64 包用于真实手机；MuMu 等 x86_64 模拟器使用双 ABI 命令。�
 ## Agent 自动流程
 
 Agent 应依次运行 `doctor`、`build`，读取 `build-report.json`、`apk-verify.json` 和 `SHA256SUMS.txt`。只有 `status=success`、源分支为 `master`、源工作树为 clean、签名指纹匹配且所有 APK 检查通过时，才报告构建完成。失败时保留 `.staging/<版本>-<profile>-<pid>-<时间戳>`，修复原因后重新运行，不修改 master。
-

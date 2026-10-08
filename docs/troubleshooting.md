@@ -10,7 +10,7 @@
 
 ## runtime cache 缺失
 
-先使用现有 Android 打包器准备 `mobile/build/runtime`、`mobile/build/termux` 和 `mobile/build/licenses`，再运行 `packager.cmd bootstrap`。缓存只读复制到 staging，缺失时构建直接停止。
+准备一个包含 `runtime/`、`termux/` 和 `licenses/` 的外部缓存目录，再运行 `packager.cmd bootstrap --source <目录>`。缓存只读复制到打包器自己的 `cache/runtime`，打包器不会调用或修改上游 `mobile/`；缺失时构建直接停止。
 
 ## 覆盖层冲突
 
@@ -23,4 +23,3 @@
 ## 模拟器 ABI
 
 真实 ARM64 手机使用默认包；MuMu、LDPlayer 等 x86_64 模拟器使用 `packager.cmd build --profile connect --abis arm64-v8a,x86_64`。报告中的 `runtimeAbis` 必须包含目标设备 ABI。
-
