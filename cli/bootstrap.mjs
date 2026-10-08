@@ -7,6 +7,9 @@ async function main() {
   const config = loadConfig();
   await inspectSource(config, false);
   const raw = process.argv.slice(2);
+  // packager.cmd forwards the original command token on Windows; tolerate it so both wrappers and direct Node
+  // invocation accept the same syntax.
+  if (raw[0] === 'bootstrap') raw.shift();
   let source = config.runtimeSourceDir ? resolveFrom(path.dirname(config.file), config.runtimeSourceDir) : null;
   for (let i = 0; i < raw.length; i++) {
     if (raw[i] === '--source' || raw[i] === '--from') {
