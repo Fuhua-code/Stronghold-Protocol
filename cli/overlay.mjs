@@ -2,6 +2,26 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { copyTree, exists, fail, PACKAGER, parseSemver, readJson, run } from './common.mjs';
 
+const TEXT_EXTENSIONS = new Set(['.cjs', '.cmd', '.css', '.html', '.java', '.js', '.json', '.mjs', '.md', '.ps1', '.sh', '.toml', '.ts', '.txt', '.xml', '.yaml', '.yml']);
+
+async function forbiddenContent(stage, token) {
+  async function walk(dir) {
+    for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+      const file = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === 'assets' || entry.name === 'fonts' || entry.name === 'runtime' || entry.name === 'termux') continue;
+        const found = await walk(file);
+        if (found) return found;
+      } else if (entry.isFile() && TEXT_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+        const stat = await fs.stat(file);
+        if (stat.size <= 8 * 1024 * 1024 && (await fs.readFile(file, 'utf8')).includes(token)) return path.relative(stage, file);
+      }
+    }
+    return null;
+  }
+  return walk(stage);
+}
+
 export async function applyOverlay(stage, config, profile, sourceVersion) {
   if (!profile.overlay) return { id: null, applied: [], files: [] };
   const root = path.join(PACKAGER, 'overlays', profile.overlay);
@@ -38,6 +58,11 @@ export async function applyOverlay(stage, config, profile, sourceVersion) {
   for (const marker of manifest.requiredMarkers || []) {
     const file = path.join(stage, marker.path); const text = await fs.readFile(file, 'utf8');
     if (!text.includes(marker.text)) fail(`overlay contract marker missing: ${marker.path} → ${marker.text}`);
+  }
+  for (const forbidden of manifest.forbiddenPaths || []) {
+    if (exists(path.join(stage, forbidden))) fail(`overlay contains forbidden path: ${forbidden}`);
+    const hit = await forbiddenContent(stage, forbidden);
+    if (hit) fail(`overlay contains forbidden token "${forbidden}" in ${hit}`);
   }
   return { id: manifest.id, version: manifest.version, applied, files: manifest.requiredPaths || [] };
 }
