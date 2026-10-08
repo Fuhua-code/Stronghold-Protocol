@@ -1,0 +1,15 @@
+# Local configuration and generated build state.
+packager.config.json
+*.local.json
+.staging/
+staging/
+outputs/*
+!outputs/.gitkeep
+cache/*
+!cache/.gitkeep
+templates/*/build/
+templates/*/keystore/
+templates/*/keys-local/
+*.apk
+*.idsig
+*.log

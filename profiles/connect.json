@@ -1,0 +1,16 @@
+{
+  "id": "connect",
+  "description": "上游 master 加本机/远程联机 UI、校验、探测、资源代理和 Android 回退流程",
+  "overlay": "connect",
+  "mobileTemplate": "connect-mobile",
+  "requiredPaths": [
+    "public/js/connect.js",
+    "public/js/screens/title.js",
+    "public/js/screens/lobby.js",
+    "public/js/ui/guide.js",
+    "shared/connect.js",
+    "server/index.js",
+    "test/remote-probe.test.js",
+    "mobile/node/main.js"
+  ]
+}

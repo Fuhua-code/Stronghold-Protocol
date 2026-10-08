@@ -1,0 +1,7 @@
+{
+  "id": "master",
+  "description": "上游 master 原样移植，不应用联机覆盖层",
+  "overlay": null,
+  "mobileTemplate": "master-mobile",
+  "forbiddenPaths": ["public/js/connect.js", "shared/connect.js", "test/remote-probe.test.js"]
+}

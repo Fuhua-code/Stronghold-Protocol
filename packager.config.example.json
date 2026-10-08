@@ -1,0 +1,17 @@
+{
+  "masterDir": "../Stronghold-Protocol-Master",
+  "dependencyDir": "../Stronghold-Protocol",
+  "assetsDir": "../Stronghold-Protocol",
+  "defaultProfile": "connect",
+  "defaultAbis": ["arm64-v8a"],
+  "toolchainDir": "../.toolchain35",
+  "runtimeCacheDir": "cache/runtime",
+  "outputDir": "outputs",
+  "packageName": "io.prts.stronghold",
+  "minimumVersionCode": 4,
+  "certificateSha256": "",
+  "keystore": "",
+  "keyAlias": "stronghold",
+  "storePasswordEnv": "PACKAGER_STORE_PASSWORD",
+  "keyPasswordEnv": "PACKAGER_KEY_PASSWORD"
+}

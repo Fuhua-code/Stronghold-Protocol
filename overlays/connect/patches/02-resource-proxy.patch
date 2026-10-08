@@ -1,0 +1,525 @@
+diff --git a/public/js/connect.js b/public/js/connect.js
+index d82cf6f..2c5c361 100644
+--- a/public/js/connect.js
++++ b/public/js/connect.js
+@@ -23,6 +23,42 @@ export async function probeRemoteGame(url, { fetchFn = globalThis.fetch, timeout
+   }
+ }
+ 
++/** Configure the Android-only loopback WebSocket bridge.  The server still re-validates the URL. */
++export async function configureRemoteProxy(url, { fetchFn = globalThis.fetch, timeoutMs = 5000 } = {}) {
++  const normalized = normalizeRemoteUrl(url);
++  if (!normalized) return { ok: false, reason: 'invalid-url' };
++  const controller = typeof AbortController === 'function' ? new AbortController() : null;
++  const timer = setTimeout(() => controller?.abort(), timeoutMs);
++  try {
++    const response = await fetchFn(`/sp-remote?url=${encodeURIComponent(normalized)}`, {
++      cache: 'no-store', signal: controller?.signal,
++    });
++    let body = null;
++    try { body = await response.json(); } catch { /* the endpoint should always return JSON */ }
++    return body && typeof body === 'object' ? body : { ok: response.ok, reason: response.ok ? 'invalid-response' : 'proxy-failed' };
++  } catch (error) {
++    return { ok: false, reason: error?.name === 'AbortError' ? 'timeout' : 'proxy-failed' };
++  } finally {
++    clearTimeout(timer);
++  }
++}
++
++/** Clear a previously configured loopback bridge before returning to local play or opening a fallback page. */
++export async function clearRemoteProxy({ fetchFn = globalThis.fetch, timeoutMs = 3000 } = {}) {
++  const controller = typeof AbortController === 'function' ? new AbortController() : null;
++  const timer = setTimeout(() => controller?.abort(), timeoutMs);
++  try {
++    const response = await fetchFn('/sp-remote?url=', { cache: 'no-store', signal: controller?.signal });
++    let body = null;
++    try { body = await response.json(); } catch { /* ignore */ }
++    return body && typeof body === 'object' ? body : { ok: response.ok };
++  } catch {
++    return { ok: false, reason: 'proxy-clear-failed' };
++  } finally {
++    clearTimeout(timer);
++  }
++}
++
+ export function androidBridge() {
+   return typeof window !== 'undefined' ? window.SP_BRIDGE || null : null;
+ }
+diff --git a/public/js/screens/title.js b/public/js/screens/title.js
+index 9462462..fde9337 100644
+--- a/public/js/screens/title.js
++++ b/public/js/screens/title.js
+@@ -238,6 +238,15 @@ export function TitleScreen() {
+   const [entryMode, setEntryMode] = useState(() => localEntry && name.trim() ? 'local' : null);
+   const selectionPress = useRef(null);
+   const [remoteBusy, setRemoteBusy] = useState(false);
++  useEffect(() => {
++    try {
++      const mode = sessionStorage.getItem('sp-remote-resource-mode');
++      if (mode) {
++        sessionStorage.removeItem('sp-remote-resource-mode');
++        toast(mode === 'local-assets' ? '远程协议兼容，当前使用本机游戏素材' : '远程连接已建立');
++      }
++    } catch { /* private browsing / old WebView */ }
++  }, []);
+   useEffect(() => {
+     if (!localEntry || !androidBridge()) return;
+     const remoteEvent = async ({ detail }) => {
+@@ -300,6 +309,20 @@ export function TitleScreen() {
+   };
+   const clearSelectionPress = () => { selectionPress.current = null; };
+ 
++  const openRemoteFallback = async (url, probe) => {
++    await clearRemoteProxy();
++    if (probe?.reason === 'version-mismatch' || probe?.reason === 'health-missing' || probe?.reason === 'ws-unavailable') {
++      const open = await confirmDialog({
++        title: '远程版本需要确认', micro: 'REMOTE COMPATIBILITY',
++        text: '远程服务器的协议、版本或 WebSocket 状态无法与本机确认一致。继续后将打开远程完整页面并使用远端素材。',
++        okText: '打开远程页面', cancelText: '返回本地',
++      });
++      if (open) openRemoteTarget(url);
++      return;
++    }
++    openRemoteTarget(url);
++  };
++
+   const submitRemote = async () => {
+     if (remoteBusy) return;
+     const url = normalizeRemoteUrl(name);
+@@ -311,9 +334,32 @@ export function TitleScreen() {
+     const probe = await probeRemoteGame(url);
+     setRemoteBusy(false);
+     if (probe.valid) {
++      if (androidBridge() && probe.proxyable) {
++        const configured = await configureRemoteProxy(probe.proxyUrl || url);
++        if (configured?.ok) {
++          try { sessionStorage.setItem('sp-remote-resource-mode', probe.assetMatch === false ? 'local-assets' : 'matched-assets'); } catch { /* ignore */ }
++          const target = new URL(url);
++          const local = new URL(location.href);
++          local.search = target.search;
++          local.hash = '';
++          location.href = local.toString();
++          return;
++        }
++        const open = await confirmDialog({
++          title: '本机资源代理失败', micro: 'REMOTE PROXY',
++          text: '无法建立本机 WebSocket 代理。继续后将打开远程完整页面并使用远端素材。',
++          okText: '打开远程页面', cancelText: '返回本地',
++        });
++        if (open) openRemoteTarget(url);
++        return;
++      }
+       openRemoteTarget(url);
+       return;
+     }
++    if (['version-mismatch', 'health-missing', 'ws-unavailable'].includes(probe.reason)) {
++      await openRemoteFallback(url, probe);
++      return;
++    }
+     if (probe.blocked) {
+       const candidateUrl = normalizeRemoteUrl(probe.candidateUrl) || url;
+       const inAppPreview = openRemotePreview(candidateUrl);
+@@ -326,7 +372,7 @@ export function TitleScreen() {
+       if (open && typeof location !== 'undefined') location.href = candidateUrl;
+       return;
+     }
+-    await alertDialog({ title: '请输入有效链接', text: '该地址不是可识别的游戏服务。', okText: '知道了', micro: 'REMOTE LINK' });
++    await alertDialog({ title: '请输入有效链接', text: '该地址不是可识别的游戏服务，或缺少兼容的健康接口。', okText: '知道了', micro: 'REMOTE LINK' });
+   };
+ 
+   const localMode = localEntry && entryMode === 'local';
+@@ -337,7 +383,7 @@ export function TitleScreen() {
+   };
+   const enterLocal = () => {
+     if (!localMode) { chooseEntryMode('local'); return; }
+-    start();
++    clearRemoteProxy().finally(start);
+   };
+   const enterRemote = () => {
+     if (!remoteMode) { chooseEntryMode('remote'); return; }
+diff --git a/server/index.js b/server/index.js
+index 72295d0..e534fe1 100644
+--- a/server/index.js
++++ b/server/index.js
+@@ -38,7 +38,7 @@ import { createHash } from 'node:crypto';
+ import { promisify } from 'node:util';
+ import { pipeline } from 'node:stream/promises';
+ import { fileURLToPath } from 'node:url';
+-import { WebSocketServer } from 'ws';
++import { WebSocket, WebSocketServer } from 'ws';
+ import { Network, SessionRegistry, NET_DEFAULTS } from './net.js';
+ import { Lobby } from './lobby.js';
+ import { getData, loadData } from './data.js';
+@@ -120,6 +120,11 @@ const IMMUTABLE_CACHE = 'public, max-age=31536000, immutable';
+ const LONG_CACHE_DIRS = ['assets', 'fonts', 'vendor']; // first path segment under public/
+ const MAX_URL_LENGTH = 4096;
+ 
++/** Limits for the optional Android-only remote WebSocket bridge. */
++const PROXY_CONNECT_TIMEOUT_MS = 8000;
++const PROXY_MAX_QUEUED_FRAMES = 64;
++const PROXY_MAX_QUEUED_BYTES = 1 << 20;
++
+ // ---------------------------------------------------------------------------------------------------
+ // build tag — the "your page is stale" signal (public/js/ui/buildGuard.js)
+ // ---------------------------------------------------------------------------------------------------
+@@ -184,6 +189,60 @@ export function buildTag(root = ROOT) {
+ /** Drop the cache: the next `buildTag()` re-reads the tree (tests, and `startServer`). */
+ export function resetBuildTag() { buildCache = null; }
+ 
++/**
++ * Hash the files which define the client/server wire behaviour.  Unlike buildTag(), this deliberately hashes file
++ * contents rather than mtimes so two checkouts with the same source produce the same compatibility value.
++ */
++function collectContentFiles(abs, rel, out, predicate = () => true) {
++  let stat;
++  try { stat = fs.statSync(abs); } catch { out.push([rel, null]); return; }
++  if (stat.isFile()) {
++    if (predicate(rel)) out.push([rel, fs.readFileSync(abs)]);
++    return;
++  }
++  if (!stat.isDirectory()) return;
++  let names;
++  try { names = fs.readdirSync(abs, { withFileTypes: true }); } catch { out.push([rel, null]); return; }
++  for (const entry of names.sort((a, b) => a.name.localeCompare(b.name))) {
++    if (isIgnoredBuildName(entry.name)) continue;
++    collectContentFiles(path.join(abs, entry.name), rel ? `${rel}/${entry.name}` : entry.name, out, predicate);
++  }
++}
++
++/** Stable compatibility fingerprint for the protocol, simulation, data and browser runtime. */
++export function computeCompatHash({ root = ROOT, publicDir = path.join(root, 'public'), dataDir = path.join(root, 'data'), sharedDir = path.join(root, 'shared') } = {}) {
++  const files = [];
++  collectContentFiles(sharedDir, 'shared', files, (rel) => /\.(?:js|mjs|json)$/i.test(rel));
++  collectContentFiles(path.join(root, 'server'), 'server', files, (rel) => /\.(?:js|mjs|json)$/i.test(rel));
++  // Asset manifests are advertised separately through `assets`; excluding them here lets a
++  // compatible client keep its bundled art when the remote server has a different asset set.
++  collectContentFiles(dataDir, 'data', files, (rel) => /\.json$/i.test(rel) && !/(?:^|\/)(?:assets|local-assets)\.json$/i.test(rel));
++  collectContentFiles(path.join(publicDir, 'js'), 'public/js', files, (rel) => /\.(?:js|mjs)$/i.test(rel));
++  collectContentFiles(path.join(publicDir, 'css'), 'public/css', files, (rel) => /\.css$/i.test(rel));
++  collectContentFiles(path.join(publicDir, 'index.html'), 'public/index.html', files);
++  files.sort((a, b) => a[0].localeCompare(b[0]));
++  const hash = createHash('sha256');
++  for (const [rel, contents] of files) {
++    hash.update(rel).update('\0');
++    if (contents == null) hash.update('<missing>');
++    else hash.update(contents);
++    hash.update('\0');
++  }
++  return hash.digest('hex').slice(0, 16);
++}
++
++/** Resource fingerprint advertised by /healthz.  The raw manifests are the authoritative asset versions. */
++export function computeAssetsHash(dataDir = path.join(ROOT, 'data')) {
++  const hash = createHash('sha256');
++  for (const name of ['assets.json', 'local-assets.json']) {
++    const file = path.join(dataDir, name);
++    hash.update(name).update('\0');
++    try { hash.update(fs.readFileSync(file)); } catch { hash.update('<missing>'); }
++    hash.update('\0');
++  }
++  return hash.digest('hex').slice(0, 16);
++}
++
+ const gzipAsync = promisify(zlib.gzip);
+ const noopLog = { info() {}, warn() {}, error() {}, debug() {} };
+ 
+@@ -663,6 +722,127 @@ export function parseTrustProxy(v) {
+   return 'auto';
+ }
+ 
++function remoteWebSocketUrl(raw) {
++  const value = String(raw ?? '').trim();
++  const directWs = /^wss?:\/\//i.test(value);
++  const normalized = normalizeRemoteUrl(directWs ? value.replace(/^ws/i, (m) => m.toLowerCase() === 'wss' ? 'https' : 'http') : value);
++  if (!normalized) return null;
++  const url = new URL(normalized);
++  url.protocol = directWs ? (/^wss:/i.test(value) ? 'wss:' : 'ws:') : (url.protocol === 'https:' ? 'wss:' : 'ws:');
++  if (!/(?:^|\/)ws\/?$/i.test(url.pathname)) url.pathname = '/ws';
++  return url.toString();
++}
++
++async function checkRemoteWebSocket(raw, timeoutMs = PROXY_CONNECT_TIMEOUT_MS) {
++  const address = remoteWebSocketUrl(raw);
++  if (!address) return false;
++  return await new Promise((resolve) => {
++    let settled = false;
++    let ws;
++    const timer = setTimeout(() => finish(false), timeoutMs);
++    const finish = (ok) => {
++      if (settled) return;
++      settled = true;
++      clearTimeout(timer);
++      try { if (ws && ws.readyState === WebSocket.OPEN) ws.close(1000, 'probe'); else ws?.terminate?.(); } catch { /* ignore */ }
++      resolve(ok);
++    };
++    try {
++      ws = new WebSocket(address, { handshakeTimeout: timeoutMs, maxPayload: WS_MAX_PAYLOAD });
++      ws.once('open', () => finish(true));
++      ws.once('error', () => finish(false));
++      ws.once('close', () => finish(false));
++    } catch {
++      finish(false);
++    }
++  });
++}
++
++/** Strict remote probe used by the local-only connect endpoint. */
++export async function probeRemoteGameStrict(raw, timeoutMs = 8000, expected = {}) {
++  const normalized = normalizeRemoteUrl(raw);
++  if (!normalized) return { reachable: false, valid: false, proxyable: false, blocked: false, reason: 'invalid-url' };
++  const target = new URL(normalized);
++  const httpsCandidate = target.protocol === 'http:' ? new URL(target.toString()) : null;
++  if (httpsCandidate) httpsCandidate.protocol = 'https:';
++  const pointsToHttps = (text) => /(?:automatic\s+https|auto(?:matic)?\s*https|浣跨敤\s*http[\s\S]{0,120}https|閲嶅畾鍚戝埌\s*https|redirect(?:ing)?\s+to\s+https)/i.test(text);
++  const controller = new AbortController();
++  const timer = setTimeout(() => controller.abort(), timeoutMs);
++  const remoteFetch = async (address) => {
++    for (let redirects = 0; redirects < 6; redirects++) {
++      const allowed = normalizeRemoteUrl(address.toString());
++      if (!allowed) throw Object.assign(new Error('local-or-invalid-redirect'), { code: 'INVALID_REMOTE_REDIRECT' });
++      const response = await fetch(allowed, { redirect: 'manual', cache: 'no-store', signal: controller.signal });
++      const next = response.headers.get('location');
++      if (![301, 302, 303, 307, 308].includes(response.status) || !next) return response;
++      await response.body?.cancel();
++      address = new URL(next, allowed);
++    }
++    throw new Error('too-many-redirects');
++  };
++  try {
++    const healthUrl = new URL('/healthz', target);
++    const health = await remoteFetch(healthUrl);
++    if (isLoopbackTarget(new URL(health.url || healthUrl, healthUrl).hostname)) {
++      return { reachable: false, valid: false, proxyable: false, blocked: false, reason: 'local-redirect' };
++    }
++    const healthText = health.status === 501 ? (await health.text()).slice(0, 64 * 1024) : '';
++    if (health.status === 501 && pointsToHttps(healthText)) {
++      return { reachable: true, valid: false, proxyable: false, blocked: true, reason: 'https-required',
++        candidateUrl: httpsCandidate?.toString() || normalized };
++    }
++    let remoteHealth = null;
++    if (health.status === 200) {
++      try { remoteHealth = await health.json(); } catch { remoteHealth = null; }
++    } else {
++      await health.body?.cancel();
++    }
++    const healthOk = !!remoteHealth && remoteHealth.ok === true
++      && typeof remoteHealth.app === 'string' && Number.isInteger(remoteHealth.protocol)
++      && typeof remoteHealth.compat === 'string' && typeof remoteHealth.assets === 'string';
++    const compatible = healthOk
++      && (expected.app == null || remoteHealth.app === expected.app)
++      && (expected.protocol == null || remoteHealth.protocol === expected.protocol)
++      && (expected.compat == null || remoteHealth.compat === expected.compat);
++    const assetMatch = expected.assets == null ? null : healthOk && remoteHealth.assets === expected.assets;
++
++    const root = await remoteFetch(new URL('/', target));
++    if (isLoopbackTarget(new URL(root.url || target, target).hostname)) {
++      return { reachable: false, valid: false, proxyable: false, blocked: false, reason: 'local-redirect' };
++    }
++    const html = (await root.text()).slice(0, 512 * 1024);
++    if (root.status === 501 && pointsToHttps(html)) {
++      return { reachable: true, valid: false, proxyable: false, blocked: true, reason: 'https-required',
++        candidateUrl: httpsCandidate?.toString() || normalized };
++    }
++    const clientOk = root.ok && /STRONGHOLD PROTOCOL/i.test(html) && /\/js\/main\.js/i.test(html);
++    const needsBrowser = !root.ok || /(?:captcha|楠岃瘉|璁よ瘉|闃茬伀澧檤access denied|checking your browser|location\.protocol\s*=|http-equiv=["']?refresh)/i.test(html);
++    if (!clientOk) {
++      return { reachable: true, valid: false, proxyable: false, blocked: needsBrowser,
++        reason: needsBrowser ? 'browser-verification' : 'not-game',
++        ...(needsBrowser && (target.protocol === 'https:' || /(?:location\.protocol\s*=\s*["']https|http-equiv=["']?refresh[^>]*https)/i.test(html))
++          ? { candidateUrl: target.protocol === 'https:' ? normalized : httpsCandidate.toString() } : {}) };
++    }
++    if (!healthOk) return { reachable: true, valid: false, proxyable: false, blocked: false, reason: 'health-missing' };
++    if (!compatible) return { reachable: true, valid: false, proxyable: false, blocked: false, reason: 'version-mismatch',
++      remoteHealth, compatible: false, assetMatch };
++    const proxyUrl = root.url || health.url || normalized;
++    const wsOk = await checkRemoteWebSocket(proxyUrl, Math.min(timeoutMs, PROXY_CONNECT_TIMEOUT_MS));
++    if (!wsOk) return { reachable: true, valid: false, proxyable: false, blocked: true, reason: 'ws-unavailable',
++      remoteHealth, compatible: true, assetMatch, proxyUrl,
++      candidateUrl: String(proxyUrl).startsWith('https:') ? proxyUrl : undefined };
++    return { reachable: true, valid: true, proxyable: true, blocked: false, reason: 'game', remoteHealth,
++      compatible: true, assetMatch, proxyUrl };
++  } catch (error) {
++    if (error?.code === 'INVALID_REMOTE_REDIRECT') return { reachable: false, valid: false, proxyable: false, blocked: false, reason: 'local-or-invalid-redirect' };
++    const timeout = error?.name === 'AbortError' || /aborted|timeout/i.test(String(error?.message || ''));
++    return { reachable: false, valid: false, proxyable: false, blocked: true, reason: timeout ? 'timeout' : 'network-error',
++      ...(target.protocol === 'https:' ? { candidateUrl: normalized } : {}) };
++  } finally {
++    clearTimeout(timer);
++  }
++}
++
+ function makeLogger(quiet) {
+   if (quiet) return noopLog;
+   return {
+@@ -683,6 +863,7 @@ function makeLogger(quiet) {
+  *   ratePerSec?: number, rateBurst?: number, maxConnections?: number, maxRooms?: number,
+  *   maxConnectionsPerAddr?: number, maxRoomsPerAddr?: number, maxMatchesPerAddr?: number, resyncMinGapMs?: number,
+  *   heavyPerSec?: number, heavyBurst?: number, trustProxy?: 'auto' | boolean, soloReconnectWindowMs?: number,
++ *   wsProxy?: boolean,
+  * }} [opts]
+  * @returns {Promise<{ port: number, host: string, url: string, server: http.Server, wss: WebSocketServer,
+  *                     lobby: Lobby, network: Network, registry: SessionRegistry, close: () => Promise<void> }>}
+@@ -695,6 +876,10 @@ export async function startServer(opts = {}) {
+   const publicDir = opts.publicDir || path.join(ROOT, 'public');
+   const dataDir = opts.dataDir || path.join(ROOT, 'data');
+   const sharedDir = opts.sharedDir || path.join(ROOT, 'shared');
++  const wsProxyEnabled = opts.wsProxy === true;
++  const compatHash = computeCompatHash({ root: ROOT, publicDir, dataDir, sharedDir });
++  const assetsHash = computeAssetsHash(dataDir);
++  let remoteProxyTarget = null;
+ 
+   // The process-wide singleton serves the default data dir; a custom dir (tests) gets its own copy.
+   const data = opts.dataDir ? loadData(dataDir, { log }) : getData({ dir: dataDir, log });
+@@ -726,6 +911,16 @@ export async function startServer(opts = {}) {
+     });
+   });
+ 
++  /** Active local WebSocket bridges.  They are intentionally loopback-only at upgrade time. */
++  const proxySockets = new Set();
++  let proxyWss = null;
++  const clearRemoteProxy = () => {
++    remoteProxyTarget = null;
++    for (const ws of proxySockets) {
++      try { ws.close(1000, 'remote proxy cleared'); } catch { ws.terminate?.(); }
++    }
++  };
++
+   async function handleRequest(req, res) {
+     const url = req.url || '/';
+     if (url.length > MAX_URL_LENGTH) { sendError(req, res, 414, '请求地址过长 · URI too long'); return; }
+@@ -752,13 +947,36 @@ export async function startServer(opts = {}) {
+         return;
+       }
+       const query = new URLSearchParams(parts.query);
+-      const result = await probeRemoteGame(query.get('url'));
++      const result = await probeRemoteGameStrict(query.get('url'), 8000, {
++        app: APP_VERSION, protocol: PROTOCOL_VERSION, compat: compatHash, assets: assetsHash,
++      });
+       sendJson(req, res, 200, result);
+       return;
+     }
++    if (parts.rawPath === '/sp-remote') {
++      if (!wsProxyEnabled) { sendJson(req, res, 404, { ok: false, reason: 'proxy-disabled' }); return; }
++      if (!isLoopbackAddress(req.socket?.remoteAddress)) {
++        sendJson(req, res, 403, { ok: false, reason: 'local-only' });
++        return;
++      }
++      const query = new URLSearchParams(parts.query);
++      const rawTarget = query.get('url') || '';
++      if (!rawTarget.trim()) {
++        clearRemoteProxy();
++        sendJson(req, res, 200, { ok: true, enabled: false });
++        return;
++      }
++      const target = remoteWebSocketUrl(rawTarget);
++      if (!target) { sendJson(req, res, 400, { ok: false, reason: 'invalid-target' }); return; }
++      clearRemoteProxy();
++      remoteProxyTarget = target;
++      sendJson(req, res, 200, { ok: true, enabled: true, target: new URL(target).origin });
++      return;
++    }
+     if (parts.rawPath === '/healthz') {
+       sendJson(req, res, 200, {
+-        ok: true, version: PROTOCOL_VERSION, app: APP_VERSION, uptimeSec: Math.round((Date.now() - startedAt) / 1000),
++        ok: true, version: PROTOCOL_VERSION, protocol: PROTOCOL_VERSION, app: APP_VERSION,
++        compat: compatHash, assets: assetsHash, uptimeSec: Math.round((Date.now() - startedAt) / 1000),
+         // the runtime the server is serving right now (public/js/ui/buildGuard.js): a page whose own build is
+         // older than this reloads itself, so a deploy reaches clients that never reload
+         build: buildTag(),
+@@ -781,6 +999,65 @@ export async function startServer(opts = {}) {
+   wss.on('connection', (ws, req) => network.handleConnection(ws, req));
+   wss.on('error', (e) => log.error('[ws] server error', e));
+ 
++  if (wsProxyEnabled) {
++    proxyWss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD, perMessageDeflate: false, clientTracking: false });
++    proxyWss.on('error', (e) => log.error('[ws-proxy] server error', e));
++  }
++
++  function attachProxySocket(local, req) {
++    const target = remoteProxyTarget;
++    if (!target) { try { local.close(1008, 'remote proxy disabled'); } catch { local.terminate?.(); } return; }
++    proxySockets.add(local);
++    let upstream = null;
++    let closed = false;
++    let queuedBytes = 0;
++    const queued = [];
++    const closePair = (code = 1011, reason = 'remote proxy closed') => {
++      if (closed) return;
++      closed = true;
++      proxySockets.delete(local);
++      try { if (local.readyState === WebSocket.OPEN) local.close(code, reason); else local.terminate?.(); } catch { /* ignore */ }
++      try { if (upstream?.readyState === WebSocket.OPEN) upstream.close(code, reason); else upstream?.terminate?.(); } catch { /* ignore */ }
++    };
++    const connectTimer = setTimeout(() => closePair(1013, 'remote server timeout'), PROXY_CONNECT_TIMEOUT_MS);
++    try {
++      upstream = new WebSocket(target, { handshakeTimeout: PROXY_CONNECT_TIMEOUT_MS, maxPayload: WS_MAX_PAYLOAD });
++      upstream.on('open', () => {
++        clearTimeout(connectTimer);
++        for (const item of queued.splice(0)) {
++          queuedBytes -= item.data.length;
++          try { upstream.send(item.data, { binary: item.isBinary }); } catch { closePair(); return; }
++        }
++      });
++      upstream.on('message', (data, isBinary) => {
++        if (closed || local.readyState !== WebSocket.OPEN) return;
++        try { local.send(data, { binary: isBinary }); } catch { closePair(); }
++      });
++      upstream.on('error', () => closePair(1011, 'remote server error'));
++      upstream.on('close', () => closePair(1001, 'remote server closed'));
++    } catch {
++      clearTimeout(connectTimer);
++      closePair(1011, 'remote server error');
++      return;
++    }
++    local.on('message', (data, isBinary) => {
++      if (closed) return;
++      const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
++      if (upstream?.readyState === WebSocket.OPEN) {
++        try { upstream.send(buf, { binary: isBinary }); } catch { closePair(); }
++        return;
++      }
++      queuedBytes += buf.length;
++      if (queued.length >= PROXY_MAX_QUEUED_FRAMES || queuedBytes > PROXY_MAX_QUEUED_BYTES) {
++        closePair(1009, 'remote proxy queue full');
++        return;
++      }
++      queued.push({ data: buf, isBinary });
++    });
++    local.on('error', () => closePair(1001, 'local socket error'));
++    local.on('close', () => closePair(1000, 'local socket closed'));
++  }
++
+   server.on('upgrade', (req, socket, head) => {
+     socket.on('error', () => {});
+     const parts = splitUrl(req.url || '/');
+@@ -788,6 +1065,14 @@ export async function startServer(opts = {}) {
+       try { socket.end(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`); } catch { socket.destroy(); }
+     };
+     if (!parts || parts.rawPath !== '/ws') { reject(404, 'Not Found'); return; }
++    if (remoteProxyTarget) {
++      // The control endpoint and proxy are for the embedded WebView only.  Never expose the configured remote
++      // server as an unauthenticated LAN relay when the phone is serving local co-op traffic.
++      if (!isLoopbackAddress(req.socket?.remoteAddress) || !proxyWss) { reject(403, 'Forbidden'); return; }
++      if (proxySockets.size >= (netOptions.maxConnections ?? NET_DEFAULTS.maxConnections)) { reject(503, 'Service Unavailable'); return; }
++      proxyWss.handleUpgrade(req, socket, head, (ws) => attachProxySocket(ws, req));
++      return;
++    }
+     const refused = network.admission(req);
+     if (refused === 'per-address') { reject(429, 'Too Many Requests'); return; }
+     if (refused) { reject(503, 'Service Unavailable'); return; }
+@@ -823,12 +1108,15 @@ export async function startServer(opts = {}) {
+     closing = (async () => {
+       try { lobby.shutdown('shutdown'); } catch (e) { log.error('[shutdown] lobby', e); }
+       network.close();
++      clearRemoteProxy();
++      for (const ws of proxySockets) { try { ws.terminate?.(); } catch { /* ignore */ } }
+       await new Promise((resolve) => {
+         server.close(() => resolve());
+         server.closeIdleConnections?.();
+         setTimeout(() => { server.closeAllConnections?.(); }, 500).unref();
+       });
+       try { wss.close(); } catch { /* ignore */ }
++      try { proxyWss?.close(); } catch { /* ignore */ }
+     })();
+     return closing;
+   }

@@ -1,0 +1,22 @@
+{
+  "id": "connect",
+  "version": "1.0.0",
+  "sourceVersion": { "min": "0.2.1", "maxMajor": 0, "maxMinor": 2 },
+  "patches": ["patches/01-remote.patch", "patches/02-resource-proxy.patch"],
+  "requiredPaths": [
+    "public/js/connect.js",
+    "public/js/screens/title.js",
+    "public/js/screens/lobby.js",
+    "public/js/ui/guide.js",
+    "shared/connect.js",
+    "server/index.js",
+    "test/remote-probe.test.js"
+  ],
+  "requiredMarkers": [
+    { "path": "public/js/screens/title.js", "text": "androidBridge" },
+    { "path": "server/index.js", "text": "/connect/probe" },
+    { "path": "server/index.js", "text": "/healthz" },
+    { "path": "mobile/node/main.js", "text": "wsProxy" }
+  ],
+  "forbiddenPaths": ["turn-space", "HF_TOKEN", "FastRTC"]
+}

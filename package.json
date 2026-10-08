@@ -1,0 +1,14 @@
+{
+  "name": "stronghold-protocol-packager",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Independent offline-first Android packager for Stronghold Protocol master worktrees",
+  "scripts": {
+    "build": "node cli/build.mjs",
+    "doctor": "node cli/doctor.mjs",
+    "bootstrap": "node cli/bootstrap.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": { "node": ">=22" }
+}
