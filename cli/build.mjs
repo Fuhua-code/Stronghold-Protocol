@@ -112,11 +112,12 @@ async function build(argv = process.argv.slice(2)) {
     await fsp.copyFile(stagedApk, finalApk);
     const verifyPath = path.join(outputDir, 'apk-verify.json');
     const verify = await runApkCheck(stage, finalApk, verifyPath);
+    const packagerManifest = readJson(path.join(PACKAGER, 'packager-manifest.json'));
     const finalReport = {
       status: 'success', generatedAt: new Date().toISOString(),
       source: { directory: config.masterDir, branch: source.git.branch, commit: source.git.commit, clean: source.git.clean },
       app: { version, versionCode: code, packageName: config.packageName },
-      packager: { version: readJson(path.join(PACKAGER, 'package.json')).version, profile: profile.id, abis },
+      packager: { version: packagerManifest.version, schemaVersion: packagerManifest.schemaVersion, profile: profile.id, abis },
       assets: { ...assets, stagingTree: tree },
       overlay,
       apk: {

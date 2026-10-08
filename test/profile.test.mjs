@@ -21,3 +21,11 @@ test('connect overlay declares an explicit supported source range and contracts'
   assert.ok(m.requiredMarkers.some((x) => x.path === 'server/index.js' && x.text === '/healthz'));
 });
 
+test('packager manifest owns the independent packager version', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, 'packager-manifest.json')));
+  const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json')));
+  assert.equal(manifest.name, 'stronghold-protocol-packager');
+  assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
+  assert.equal(manifest.version, packageJson.version);
+  assert.deepEqual(manifest.profiles, ['master', 'connect']);
+});
