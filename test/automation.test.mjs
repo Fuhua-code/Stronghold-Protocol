@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { allocateVersion } from '../ci/version.mjs';
 import { fileManifest, safePath, redact, api, releaseMeta, META_PREFIX } from '../ci/lib.mjs';
-import { verifyBundle, archivePaths, collectAssetReferences, assessCoverage } from '../ci/inputs.mjs';
+import { verifyBundle, archivePaths, collectAssetReferences, assessCoverage, selectAssets } from '../ci/inputs.mjs';
 import { stageSource } from '../cli/source.mjs';
 import { validateReport } from '../ci/publish.mjs';
 import { classifyBuildFailure, run } from '../cli/common.mjs';
@@ -68,6 +68,19 @@ test('asset bundles are selected by content coverage, not version or manifest by
     assert.equal(incomplete.complete,false);
     assert.deepEqual(incomplete.missing,['public/fonts/ui.woff2']);
   } finally { await fs.rm(root,{recursive:true,force:true}); }
+});
+
+test('complete upstream source coverage is selected without a bundle manifest', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'packager-source-coverage-'));
+  try {
+    await fs.mkdir(path.join(root, 'data'), { recursive: true });
+    await fs.mkdir(path.join(root, 'public', 'assets'), { recursive: true });
+    await fs.writeFile(path.join(root, 'data', 'assets.json'), JSON.stringify(['/assets/board.bin']));
+    await fs.writeFile(path.join(root, 'public', 'assets', 'board.bin'), 'board');
+    const selected = await selectAssets({ source: root, pins: { bundles: [] }, cacheRoot: path.join(root, 'cache') });
+    assert.equal(selected.id, 'upstream-source');
+    assert.equal(selected.coverage.complete, true);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
 test('staging preserves the current upstream asset manifests', async () => {

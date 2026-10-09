@@ -64,7 +64,11 @@ export async function collectAssetReferences(source) {
 }
 
 export async function assessCoverage(root, references, manifest = null) {
-  const listed = new Set((manifest?.files || []).map((row) => row.path));
+  // Source coverage uses a synthetic manifest made from the upstream paths,
+  // while downloaded bundles use manifest rows with path/hash metadata.
+  // Normalize both shapes before calculating extras so a current upstream
+  // checkout can be selected without dereferencing an undefined row.path.
+  const listed = new Set((manifest?.files || []).map((row) => typeof row === 'string' ? row : row?.path).filter(Boolean));
   const missing = [];
   for (const relative of references) {
     const file = safePath(root, relative);
