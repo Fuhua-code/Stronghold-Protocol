@@ -7,8 +7,16 @@
         "sourceVersion": "0.2.2",
         "priority": 10,
         "tag": "android-assets-0.2.2",
-        "file": "stronghold-assets-0.2.2.tar.gz",
-        "sha256": "12de8b0f061d05aafa941143ae835c75fbc638263fd4b872aafcd572e6c179a5"
+        "parts": [
+          {
+            "file": "stronghold-assets-0.2.2-a.tar.gz",
+            "sha256": "b9cb7a6c2f63a14246599e462326753d75d437b4b744d94410f0779fabd7c1f0"
+          },
+          {
+            "file": "stronghold-assets-0.2.2-b.tar.gz",
+            "sha256": "f823fe70ab186bd9b39dd39961f349f683b5d6cff326d1b6a3ecda953d7442d2"
+          }
+        ]
       },
       {
         "sourceVersion": "0.2.1",

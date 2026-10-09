@@ -85,22 +85,27 @@ export async function assessCoverage(root, references, manifest = null) {
 
 async function restore(pin, kind, destination) {
   const code = kind === 'assets' ? 'asset-missing-or-mismatch' : 'toolchain/runtime-failure';
-  if (!pin || !/^[a-f0-9]{64}$/.test(pin.sha256 || '') || !/^[A-Za-z0-9_.-]+\.tar\.gz$/.test(pin.file || '') || !/^[A-Za-z0-9_.-]+$/.test(pin.tag || '')) fail(`Invalid ${kind} Release input`, code);
-  const download = path.resolve('cache/downloads', pin.file);
-  await fs.mkdir(path.dirname(download), { recursive: true });
-  if (!exists(download) || await sha256(download) !== pin.sha256) {
-    const res = await fetch(`https://github.com/${REPO}/releases/download/${pin.tag}/${pin.file}`, { signal: AbortSignal.timeout(600_000) });
-    if (!res.ok) fail(`${kind} Release download returned HTTP ${res.status}`, code);
-    await pipeline(res.body, createWriteStream(download + '.part'));
-    if (await sha256(download + '.part') !== pin.sha256) fail(`${kind} archive SHA256 mismatch`, code);
-    await fs.rename(download + '.part', download);
+  const parts = Array.isArray(pin?.parts) ? pin.parts : [{ file: pin?.file, sha256: pin?.sha256 }];
+  if (!pin || !parts.length || !parts.every(part => /^[a-f0-9]{64}$/.test(part?.sha256 || '') && /^[A-Za-z0-9_.-]+\.tar\.gz$/.test(part?.file || '')) || !/^[A-Za-z0-9_.-]+$/.test(pin.tag || '')) fail(`Invalid ${kind} Release input`, code);
+  const downloads = [];
+  await fs.mkdir(path.resolve('cache/downloads'), { recursive: true });
+  for (const part of parts) {
+    const download = path.resolve('cache/downloads', part.file);
+    if (!exists(download) || await sha256(download) !== part.sha256) {
+      const res = await fetch(`https://github.com/${REPO}/releases/download/${pin.tag}/${part.file}`, { signal: AbortSignal.timeout(600_000) });
+      if (!res.ok) fail(`${kind} Release download returned HTTP ${res.status}`, code);
+      await pipeline(res.body, createWriteStream(download + '.part'));
+      if (await sha256(download + '.part') !== part.sha256) fail(`${kind} archive SHA256 mismatch`, code);
+      await fs.rename(download + '.part', download);
+    }
+    archivePaths(run('tar', ['-tzf', download]).out);
+    const verbose = run('tar', ['-tvzf', download]).out;
+    if (verbose.split(/\r?\n/).filter(Boolean).some(x => !['-', 'd'].includes(x[0]))) fail('Archive contains links or special entries', code);
+    downloads.push(download);
   }
-  archivePaths(run('tar', ['-tzf', download]).out);
-  const verbose = run('tar', ['-tvzf', download]).out;
-  if (verbose.split(/\r?\n/).filter(Boolean).some(x => !['-', 'd'].includes(x[0]))) fail('Archive contains links or special entries', code);
   await fs.rm(destination, { recursive: true, force: true });
   await fs.mkdir(destination, { recursive: true });
-  run('tar', ['-xzf', download, '-C', destination]);
+  for (const download of downloads) run('tar', ['-xzf', download, '-C', destination]);
   const manifest = await verifyBundle(destination, kind);
   return { ...pin, files: manifest.files.length, bytes: manifest.totalBytes, manifestSha256: await sha256(path.join(destination, 'input-manifest.json')) };
 }
