@@ -1,0 +1,55 @@
+name: Pages standalone game
+on:
+  push:
+    branches: [feat/github-pages-standalone]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages-standalone
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/github-pages-standalone
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Fetch pinned full resource archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p .cache/pages-assets
+          tag=$(node -p "require('./pages/resources.json').tag")
+          file=$(node -p "require('./pages/resources.json').file")
+          sha=$(node -p "require('./pages/resources.json').sha256")
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$file" --dir .cache
+          echo "$sha  .cache/$file" | sha256sum --check --strict
+          tar -xzf ".cache/$file" -C .cache/pages-assets
+      - run: npm run pages:test
+      - name: Build Pages site with public TURN endpoint
+        env:
+          # Public Vercel Function URL only; Cloudflare long-lived credentials stay in Vercel env vars.
+          PAGES_TURN_CREDENTIALS_URL: ${{ vars.PAGES_TURN_CREDENTIALS_URL }}
+        run: npm run pages:build
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: pages-dist
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.publish.outputs.page_url }}
+    steps:
+      - name: Publish site
+        id: publish
+        uses: actions/deploy-pages@v4

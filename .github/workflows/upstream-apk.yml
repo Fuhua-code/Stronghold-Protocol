@@ -1,0 +1,207 @@
+name: Upstream connect APK
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      upstream_sha:
+        description: 'Full upstream commit SHA; empty means latest master'
+        type: string
+        default: ''
+      dry_run:
+        description: 'Build and verify; do not publish a Release'
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths: ['cli/**', 'ci/**', 'test/**', 'templates/**', 'overlays/**', '.github/workflows/upstream-apk.yml']
+
+# Serialize allocation + publication, including different SHAs with the same game version.
+concurrency:
+  group: upstream-apk-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  UPSTREAM_DIR: ${{ github.workspace }}/upstream-source
+  DRY_RUN: ${{ github.event_name == 'push' || inputs.dry_run == true }}
+
+jobs:
+  detect:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    outputs:
+      sha: ${{ steps.detect.outputs.sha }}
+      skip: ${{ steps.detect.outputs.skip }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.22.0'
+      - id: detect
+        name: Resolve upstream and check published SHA
+        env:
+          REQUESTED_SHA: ${{ inputs.upstream_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node ci/detect.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: detection
+          path: outputs/*.json
+          retention-days: 14
+
+  build:
+    needs: detect
+    if: needs.detect.outputs.skip == 'false'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 75
+    env:
+      UPSTREAM_SHA: ${{ needs.detect.outputs.sha }}
+    outputs:
+      version: ${{ steps.upstream.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.22.0'
+      - name: Packager fixtures
+        run: npm test
+      - name: Isolated upstream checkout
+        run: |
+          git init "$UPSTREAM_DIR"
+          git -C "$UPSTREAM_DIR" remote add upstream https://github.com/sganggs/Stronghold-Protocol.git
+          git -C "$UPSTREAM_DIR" fetch --depth=1 upstream "$UPSTREAM_SHA"
+          git -C "$UPSTREAM_DIR" checkout -B master FETCH_HEAD
+          test "$(git -C "$UPSTREAM_DIR" rev-parse HEAD)" = "$UPSTREAM_SHA"
+      - id: upstream
+        name: Upstream Node CI and service smoke
+        run: node ci/upstream-check.mjs
+      - name: Overlay preflight before downloading large inputs
+        run: node ci/compat.mjs
+      - name: Pin-verified assets and runtime
+        env:
+          APP_VERSION: ${{ steps.upstream.outputs.version }}
+        run: node ci/inputs.mjs
+      - id: version
+        name: Allocate monotonic versionCode
+        env:
+          APP_VERSION: ${{ steps.upstream.outputs.version }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node ci/version.mjs
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17.0.14+7'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+      - name: Install fixed Android SDK packages
+        run: |
+          sdkmanager 'build-tools;35.0.0' 'platforms;android-35'
+          mkdir -p cache/ci-toolchain
+          ln -s "$JAVA_HOME" cache/ci-toolchain/jdk
+          ln -s "$ANDROID_HOME" cache/ci-toolchain/android-sdk
+          command -v gpgv
+          command -v tar
+          command -v xz
+          df -h .
+      - name: Decode external signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.PACKAGER_KEYSTORE_B64 }}
+        run: |
+          node --input-type=module -e "import fs from 'node:fs'; if (!process.env.KEYSTORE_B64) { fs.mkdirSync('outputs',{recursive:true});fs.writeFileSync('outputs/automation-failure.json',JSON.stringify({status:'failed',code:'signing-failure',stage:'signing',message:'PACKAGER_KEYSTORE_B64 is missing'}));process.exit(1); } fs.writeFileSync(process.env.RUNNER_TEMP+'/release.keystore',Buffer.from(process.env.KEYSTORE_B64,'base64'),{mode:0o600});"
+      - name: Connect dual ABI build, signature and extracted APK checks
+        env:
+          PACKAGER_CI: 'true'
+          PACKAGER_KEYSTORE: ${{ runner.temp }}/release.keystore
+          PACKAGER_KEY_ALIAS: ${{ secrets.PACKAGER_KEY_ALIAS }}
+          PACKAGER_STORE_PASSWORD: ${{ secrets.PACKAGER_STORE_PASSWORD }}
+          PACKAGER_KEY_PASSWORD: ${{ secrets.PACKAGER_KEY_PASSWORD }}
+          PACKAGER_CERT_SHA256: ${{ secrets.PACKAGER_CERT_SHA256 }}
+        run: node cli/build.mjs --profile connect --abis arm64-v8a,x86_64 --version-code '${{ steps.version.outputs.versionCode }}'
+      - name: Remove private build state
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/release.keystore"
+          rm -rf .staging
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: apk-diagnostics
+          path: outputs/
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: warn
+
+  publish:
+    needs: [detect, build]
+    if: needs.build.result == 'success' && github.event_name != 'push' && inputs.dry_run != true
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+    env:
+      UPSTREAM_SHA: ${{ needs.detect.outputs.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.22.0'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: apk-diagnostics
+          path: outputs
+      - name: Publish verified Release atomically
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PACKAGER_CERT_SHA256: ${{ secrets.PACKAGER_CERT_SHA256 }}
+          PACKAGER_SHA: ${{ github.sha }}
+        run: node ci/publish.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: release-result
+          path: outputs/*.json
+          retention-days: 14
+
+  notify:
+    needs: [detect, build, publish]
+    if: always() && needs.detect.outputs.skip != 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.22.0'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        continue-on-error: true
+        with:
+          pattern: '*'
+          path: outputs
+          merge-multiple: true
+      - name: Update failure Issue or close after publication
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          UPSTREAM_SHA: ${{ needs.detect.outputs.sha }}
+          RUN_SUCCEEDED: ${{ needs.publish.result == 'success' || (needs.build.result == 'success' && (github.event_name == 'push' || inputs.dry_run == true)) }}
+          FAILURE_STAGE: ${{ needs.publish.result == 'failure' && 'release-failure' || needs.detect.result == 'failure' && 'upstream-check-failure' || 'toolchain/runtime-failure' }}
+        run: node ci/notify.mjs
+      - name: Mark any blocked run failed
+        if: needs.detect.result == 'failure' || needs.build.result == 'failure' || needs.build.result == 'cancelled' || needs.publish.result == 'failure' || needs.publish.result == 'cancelled'
+        run: exit 1

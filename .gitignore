@@ -3,6 +3,7 @@ packager.config.json
 *.local.json
 .staging/
 staging/
+upstream-source/
 outputs/*
 !outputs/.gitkeep
 cache/*

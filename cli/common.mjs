@@ -12,7 +12,26 @@ export function exists(p) { try { fs.accessSync(p); return true; } catch { retur
 export function readJson(p) { return JSON.parse(fs.readFileSync(p, 'utf8')); }
 export async function writeJson(p, value) { await fsp.mkdir(path.dirname(p), { recursive: true }); await fsp.writeFile(p, JSON.stringify(value, null, 2) + '\n'); }
 export function resolveFrom(base, value) { return path.resolve(base, value || '.'); }
-export function fail(message) { const e = new Error(message); e.code = 'PACKAGER_ERROR'; throw e; }
+export function fail(message, code = 'PACKAGER_ERROR') { const e = new Error(message); e.code = code; throw e; }
+
+export function classifyBuildFailure(error) {
+  if (error?.code && error.code !== 'PACKAGER_ERROR') return error.code;
+  const text = String(error?.message || error).toLowerCase();
+  if (/overlay patch conflict|overlay contract|does not support master|contract marker/.test(text)) return 'overlay-contract-break';
+  if (/asset manifest|assets\.json|local-assets|asset archive|resource manifest/.test(text)) return 'asset-missing-or-mismatch';
+  if (/keystore|signing|certificate sha-256|key alias|password/.test(text)) return 'signing-failure';
+  if (/apk verification|apk checker|signature|dt_needed|unresolved/.test(text)) return 'apk-verification-failure';
+  if (/runtime|toolchain|android sdk|build-tools|jdk|aapt2|d8|zipalign|apksigner/.test(text)) return 'toolchain/runtime-failure';
+  return 'apk-build-failure';
+}
+
+export function sanitizeDiagnostic(value) {
+  let text = String(value || '').replace(/\x1b\[[0-9;]*m/g, '');
+  for (const [name, secret] of Object.entries(process.env)) {
+    if (/TOKEN|PASSWORD|SECRET|KEYSTORE_B64/i.test(name) && secret && secret.length >= 4) text = text.split(secret).join('[redacted]');
+  }
+  return text.replace(/(?:Bearer\s+|pass:)[^\s"']+/gi, '[redacted]');
+}
 
 export function run(command, args = [], { cwd = PACKAGER, env = {}, capture = true, allowFail = false } = {}) {
   const r = spawnSync(command, args, {
@@ -77,14 +96,14 @@ export function loadConfig() {
 }
 
 export function parseArgs(argv) {
-  const out = { command: 'build', profile: null, abis: null, apk: null, allowDirty: false, json: null };
+  const out = { command: 'build', profile: null, abis: null, apk: null, allowDirty: false, json: null, versionCode: null };
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--allow-dirty') { out.allowDirty = true; continue; }
     if (!a.startsWith('-')) { positional.push(a); continue; }
     const [key, inline] = a.split('=', 2);
-    const needsValue = ['--profile', '--abis', '--abi', '--apk', '--json'].includes(key);
+    const needsValue = ['--profile', '--abis', '--abi', '--apk', '--json', '--version-code'].includes(key);
     if (!needsValue) fail(`unknown option ${a}`);
     const value = inline ?? argv[++i];
     if (value == null || String(value).startsWith('--')) fail(`${key} requires a value`);
@@ -92,6 +111,11 @@ export function parseArgs(argv) {
     else if (key === '--abis' || key === '--abi') out.abis = String(value).split(',').filter(Boolean);
     else if (key === '--apk') out.apk = value;
     else if (key === '--json') out.json = value;
+    else if (key === '--version-code') {
+      const code = Number(value);
+      if (!Number.isSafeInteger(code) || code < 1 || code > 2_100_000_000) fail(`invalid --version-code: ${value}`);
+      out.versionCode = code;
+    }
   }
   if (positional[0]) out.command = positional[0];
   return out;

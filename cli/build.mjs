@@ -9,8 +9,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  PACKAGER, copyTree, exists, fail, hashTree, loadConfig, parseArgs, readJson,
-  removeIfExists, run, versionCode, writeJson,
+  PACKAGER, classifyBuildFailure, copyTree, exists, fail, hashTree, loadConfig, parseArgs, readJson,
+  removeIfExists, run, versionCode, writeJson, sanitizeDiagnostic,
 } from './common.mjs';
 import { inspectSource, stageSource } from './source.mjs';
 import { checkAssets } from './assets.mjs';
@@ -54,7 +54,8 @@ function checkForbidden(stage, profile) {
 async function runApkCheck(stage, apk, json) {
   const checker = path.join(stage, 'mobile', 'tools', 'check-apk.mjs');
   if (!exists(checker)) fail('Android template does not include mobile/tools/check-apk.mjs');
-  const result = run(process.execPath, [checker, '--apk', apk, '--json', json], { cwd: stage, allowFail: true });
+  const cleanEnv = Object.fromEntries(Object.keys(process.env).filter(k => /TOKEN|PASSWORD|SECRET|KEYSTORE/i.test(k)).map(k => [k, '']));
+  const result = run(process.execPath, [checker, '--apk', apk, '--json', json], { cwd: stage, env: cleanEnv, allowFail: true });
   if (!result.ok) fail(`APK verification failed\n${result.out.slice(-8000)}`);
   if (!exists(json)) fail('APK checker exited successfully without writing apk-verify.json');
   return readJson(json);
@@ -68,7 +69,8 @@ async function build(argv = process.argv.slice(2)) {
   if (!abis.length) fail('at least one ABI is required');
   const source = await inspectSource(config, args.allowDirty);
   const version = source.package.version;
-  const code = versionCode(version, config.minimumVersionCode);
+  const code = args.versionCode || versionCode(version, config.minimumVersionCode);
+  if (code < config.minimumVersionCode) fail('Explicit versionCode is below the configured upgrade floor', 'apk-verification-failure');
   const signing = signingEnv(config);
   const stage = path.join(PACKAGER, '.staging', `${version}-${profile.id}-${process.pid}-${Date.now()}`);
   const outputDir = path.join(config.outputDir, version, profile.id);
@@ -84,6 +86,12 @@ async function build(argv = process.argv.slice(2)) {
     await copyRuntimeCache(config, stage);
     const overlay = await applyOverlay(stage, config, profile, version);
     checkForbidden(stage, profile);
+    if (process.env.PACKAGER_CI === 'true') {
+      const env = { SP_E2E: '0', SP_REAL_E2E: '0', RENDER_E2E: '0', NO_COLOR: '1',
+        ...Object.fromEntries(Object.keys(process.env).filter(k => /TOKEN|PASSWORD|SECRET|KEYSTORE/i.test(k)).map(k => [k, ''])) };
+      const tested = run(process.execPath, ['--test'], { cwd: stage, env, allowFail: true });
+      if (!tested.ok) fail(`Injected server tests failed\n${sanitizeDiagnostic(tested.out.slice(-4000))}`, 'upstream-test-failure');
+    }
     const tree = await hashTree(stage);
     const apkName = `Stronghold-Protocol-${version}-${abis.join('-')}.apk`;
     const stagedApk = path.join(stage, apkName);
@@ -99,8 +107,9 @@ async function build(argv = process.argv.slice(2)) {
       SP_PLATFORM: config.platform || 'android-35',
       SP_PACKAGE_NAME: config.packageName,
     };
-    const javaHome = path.join(config.toolchainDir, 'jdk');
-    if (exists(javaHome)) verifyCertificate(javaHome, signing);
+    const javaHome = exists(path.join(config.toolchainDir, 'jdk')) ? path.join(config.toolchainDir, 'jdk') : process.env.JAVA_HOME;
+    if (!javaHome) fail('JDK is required to verify the signing certificate', 'signing-failure');
+    verifyCertificate(javaHome, signing);
     const mobileBuilder = path.join(stage, 'mobile', 'build-apk.mjs');
     if (!exists(mobileBuilder)) fail('Android template is missing mobile/build-apk.mjs');
     const argsForBuilder = [mobileBuilder, `--abi=${abis.join(',')}`, `--out=${stagedApk}`, `--json=${reportPath}`, '--no-download'];
@@ -108,6 +117,12 @@ async function build(argv = process.argv.slice(2)) {
     if (!built.ok) fail(`Android build failed\n${built.out.slice(-10000)}`);
     if (!exists(stagedApk)) fail(`Android builder did not produce ${stagedApk}`);
     const builderReport = exists(reportPath) ? readJson(reportPath) : null;
+    const sig = builderReport?.apk?.signatures;
+    if (!sig?.v1 || !sig.v2 || !sig.v3 || sig.certificateSha256 !== signing.expected) fail('APK signature or certificate verification failed', 'signing-failure');
+    const sdk = process.env.ANDROID_SDK_ROOT || process.env.ANDROID_HOME || path.join(config.toolchainDir, 'android-sdk');
+    const aapt = path.join(sdk, 'build-tools', config.buildTools || '35.0.0', process.platform === 'win32' ? 'aapt2.exe' : 'aapt2');
+    const badging = run(aapt, ['dump', 'badging', stagedApk]).out;
+    if (!badging.includes(`name='${config.packageName}'`) || !badging.includes(`versionName='${version}'`) || !badging.includes(`versionCode='${code}'`)) fail('APK package/version mismatch', 'apk-verification-failure');
     const finalApk = path.join(outputDir, apkName);
     await fsp.copyFile(stagedApk, finalApk);
     const verifyPath = path.join(outputDir, 'apk-verify.json');
@@ -116,7 +131,7 @@ async function build(argv = process.argv.slice(2)) {
     const finalReport = {
       status: 'success', generatedAt: new Date().toISOString(),
       source: { directory: config.masterDir, branch: source.git.branch, commit: source.git.commit, clean: source.git.clean },
-      app: { version, versionCode: code, packageName: config.packageName },
+      app: { version, versionCode: code, versionCodeOverridden: Boolean(args.versionCode), packageName: config.packageName },
       packager: { version: packagerManifest.version, schemaVersion: packagerManifest.schemaVersion, profile: profile.id, abis },
       assets: { ...assets, stagingTree: tree },
       overlay,
@@ -139,4 +154,13 @@ async function build(argv = process.argv.slice(2)) {
   }
 }
 
-build().catch((error) => { console.error(`\nPACKAGER FAILED: ${error.message}`); process.exitCode = 1; });
+build().catch(async (error) => {
+  console.error(`\nPACKAGER FAILED: ${sanitizeDiagnostic(error.message)}`);
+  // CI consumes this small, credential-free marker when the build fails before a normal report exists.
+  try {
+    await writeJson(path.join(PACKAGER, 'outputs', 'failure-report.json'), {
+      status: 'failed', generatedAt: new Date().toISOString(), code: classifyBuildFailure(error), message: sanitizeDiagnostic(error.message || error).slice(0, 4000),
+    });
+  } catch { /* preserve the original build failure */ }
+  process.exitCode = 1;
+});

@@ -1711,10 +1711,10 @@ async function main() {
   ok(`aligned (${alignment.detail})`);
   const store = await ensureKeystore(javaHome);
   await fsp.rm(apkOut, { force: true });
-  run(sdk.apksigner, ['sign', '--ks', KEYSTORE, '--ks-pass', `pass:${store.storePassword}`, '--key-pass', `pass:${store.keyPassword}`,
+  run(sdk.apksigner, ['sign', '--ks', KEYSTORE, '--ks-pass', 'env:SP_SIGN_STORE_PASSWORD', '--key-pass', 'env:SP_SIGN_KEY_PASSWORD',
     '--ks-key-alias', store.alias, '--min-sdk-version', TOOLS.minSdk,
     '--v1-signing-enabled', 'true', '--v2-signing-enabled', 'true', '--v3-signing-enabled', 'true',
-    '--out', apkOut, aligned], { env });
+    '--out', apkOut, aligned], { env: { ...env, SP_SIGN_STORE_PASSWORD: store.storePassword, SP_SIGN_KEY_PASSWORD: store.keyPassword } });
   await fsp.rm(aligned, { force: true });
   ok(`signed: ${path.relative(REPO, apkOut)}`);
 

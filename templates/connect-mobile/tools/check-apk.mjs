@@ -220,11 +220,18 @@ async function main() {
   const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'sp-apk-'));
   const projectDir = path.join(tmp, 'nodejs-project');
   let bytes = 0;
+  let sourceMatches = 0;
+  const builtProject = path.join(REPO, 'mobile', 'build', 'nodejs-project');
   const t0 = Date.now();
   for (const e of assets) {
     if (e.name.endsWith('/')) continue;
     const rel = e.name.slice('assets/nodejs-project/'.length);
     const data = await readEntry(zip, e); // verifies size + CRC of every packaged file
+    if (fs.existsSync(builtProject)) {
+      const input = await fsp.readFile(path.join(builtProject, rel));
+      if (!input.equals(data)) throw new Error(`packaged source mismatch: ${rel}`);
+      sourceMatches++;
+    }
     bytes += data.length;
     const dest = path.join(projectDir, rel);
     await fsp.mkdir(path.dirname(dest), { recursive: true });
@@ -232,6 +239,7 @@ async function main() {
   }
   await zip.fh.close();
   check('every packaged asset unpacks with a valid CRC', true, `${assets.length} files, ${(bytes / 1048576).toFixed(1)} MB in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+  if (sourceMatches) check('packaged project matches build inputs byte-for-byte', true, `${sourceMatches} files`);
 
   // ---- run the unpacked project with a Node 22+ interpreter (the runtime the APK ships is Node 24) ----------
   const exe = resolveNode(o.node) || process.execPath;
@@ -286,7 +294,14 @@ async function main() {
       else if (n && typeof n === 'object') Object.values(n).forEach(walk);
     };
     walk(index);
+    const local = path.join(projectDir, 'data', 'local-assets.json');
+    if (fs.existsSync(local)) walk(JSON.parse(await fsp.readFile(local, 'utf8')));
     const uniq = [...new Set(urls)];
+    const absent = uniq.filter(url => !byName.has('assets/nodejs-project/public' + url));
+    check('all standard and local manifest assets packaged', absent.length === 0, `${uniq.length} URLs; missing: ${absent.slice(0,3).join(', ')}`);
+    const marker = await fsp.readFile(path.join(projectDir, 'public', 'ASSETS-VERSION'), 'utf8');
+    const pkg = JSON.parse(await fsp.readFile(path.join(projectDir, 'package.json'), 'utf8'));
+    check('ASSETS-VERSION matches game version and fingerprint', marker.startsWith(pkg.version + '-') && /-[a-f0-9]{64}\s*$/.test(marker));
     const step = Math.max(1, Math.floor(uniq.length / o.sample));
     const sample = uniq.filter((_, i) => i % step === 0).slice(0, o.sample);
     const missing = [];

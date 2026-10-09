@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "legacyMaximumVersionCode": 2001,
+  "assets": {
+    "0.2.1": {
+      "tag": "android-assets-0.2.1",
+      "file": "stronghold-assets-0.2.1.tar.gz",
+      "sha256": "b1bff9e996a2b80257898eb454bcc022f6b5eabb9e8ab800a22e074a3c253288"
+    }
+  },
+  "runtime": {
+    "version": "node24.18.0-r1",
+    "tag": "android-runtime-node24.18.0-r1",
+    "file": "stronghold-runtime-node24.18.0-r1.tar.gz",
+    "sha256": "5bab822a770b2609394bd107412b539a3c013c7f0ad8e320e8f5ce77ae7bab76"
+  }
+}

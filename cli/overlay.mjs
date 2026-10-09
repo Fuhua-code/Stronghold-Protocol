@@ -28,16 +28,19 @@ export async function applyOverlay(stage, config, profile, sourceVersion) {
   const manifest = readJson(path.join(root, 'manifest.json'));
   const v = parseSemver(sourceVersion);
   const min = parseSemver(manifest.sourceVersion.min);
-  if (v.major !== manifest.sourceVersion.maxMajor || v.minor !== manifest.sourceVersion.maxMinor || v.major < min.major || (v.major === min.major && v.minor < min.minor)) {
-    fail(`overlay ${manifest.id}@${manifest.version} does not support master ${sourceVersion}`);
+  if (v.major !== manifest.sourceVersion.maxMajor || v.minor !== manifest.sourceVersion.maxMinor || v.major < min.major || (v.major === min.major && (v.minor < min.minor || (v.minor === min.minor && v.patch < min.patch)))) {
+    fail(`overlay ${manifest.id}@${manifest.version} does not support master ${sourceVersion}`, 'overlay-contract-break');
   }
   const applied = [];
   for (const rel of manifest.patches || []) {
     const patch = path.join(root, rel);
     if (!exists(patch)) fail(`overlay patch missing: ${rel}`);
-    const check = run('git', ['apply', '--check', patch], { cwd: stage, allowFail: true });
-    if (!check.ok) fail(`overlay patch conflict: ${rel}\n${check.out.slice(-6000)}`);
-    run('git', ['apply', '--unsafe-paths', patch], { cwd: stage });
+    // A staging directory lives inside the packager checkout. Prevent Git from discovering that parent repo,
+    // otherwise git apply silently skips patch paths outside the staging prefix while returning success.
+    const gitEnv = { GIT_CEILING_DIRECTORIES: path.dirname(stage), GIT_DIR: '', GIT_WORK_TREE: '' };
+    const check = run('git', ['apply', '--check', patch], { cwd: stage, env: gitEnv, allowFail: true });
+    if (!check.ok) fail(`overlay patch conflict: ${rel}\n${check.out.slice(-6000)}`, 'overlay-contract-break');
+    run('git', ['apply', patch], { cwd: stage, env: gitEnv });
     applied.push(rel);
   }
   // The Android resource-proxy template already contains its mobile entry changes. The title import is kept as
@@ -49,15 +52,15 @@ export async function applyOverlay(stage, config, profile, sourceVersion) {
       const oldImport = "import { androidBridge, isLoopbackHost, normalizeRemoteUrl, probeRemoteGame } from '../connect.js';";
       const newImport = "import { androidBridge, clearRemoteProxy, configureRemoteProxy, isLoopbackHost, normalizeRemoteUrl, probeRemoteGame } from '../connect.js';";
       if (text.includes(oldImport)) text = text.replace(oldImport, newImport);
-      else if (!text.includes(newImport)) fail('overlay contract anchor missing: title.js connect import');
+      else if (!text.includes(newImport)) fail('overlay contract anchor missing: title.js connect import', 'overlay-contract-break');
       await fs.writeFile(title, text);
       applied.push('anchor:title.js remote proxy imports');
     }
   }
-  for (const rel of manifest.requiredPaths || []) if (!exists(path.join(stage, rel))) fail(`overlay contract path missing after patch: ${rel}`);
+  for (const rel of manifest.requiredPaths || []) if (!exists(path.join(stage, rel))) fail(`overlay contract path missing after patch: ${rel}`, 'overlay-contract-break');
   for (const marker of manifest.requiredMarkers || []) {
     const file = path.join(stage, marker.path); const text = await fs.readFile(file, 'utf8');
-    if (!text.includes(marker.text)) fail(`overlay contract marker missing: ${marker.path} → ${marker.text}`);
+    if (!text.includes(marker.text)) fail(`overlay contract marker missing: ${marker.path} → ${marker.text}`, 'overlay-contract-break');
   }
   for (const forbidden of manifest.forbiddenPaths || []) {
     if (exists(path.join(stage, forbidden))) fail(`overlay contains forbidden path: ${forbidden}`);

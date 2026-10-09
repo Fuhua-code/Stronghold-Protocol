@@ -10,11 +10,10 @@ test('stable SemVer and deterministic Android versionCode', () => {
 
 test('build arguments do not consume the command or following flags', () => {
   assert.deepEqual(parseArgs(['build', '--profile', 'master', '--abis', 'arm64-v8a,x86_64']), {
-    command: 'build', profile: 'master', abis: ['arm64-v8a', 'x86_64'], apk: null, allowDirty: false, json: null,
+    command: 'build', profile: 'master', abis: ['arm64-v8a', 'x86_64'], apk: null, allowDirty: false, json: null, versionCode: null,
   });
 });
 
 test('asset manifest walker only returns public asset URLs', () => {
   assert.deepEqual(manifestUrls({ a: '/assets/a.png', b: ['/fonts/x.woff2', '/data/nope'], c: { d: '/assets/a.png' } }), ['/assets/a.png', '/fonts/x.woff2', '/assets/a.png']);
 });
-
