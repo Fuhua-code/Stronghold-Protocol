@@ -40,6 +40,24 @@ export async function applyOverlay(stage, config, profile, sourceVersion) {
     fail(`overlay ${manifest.id}@${manifest.version} does not support master ${sourceVersion}`, 'overlay-contract-break');
   }
   const applied = [];
+  const copied = [];
+  const anchors = [];
+  for (const entry of manifest.files || []) {
+    const sourceRel = typeof entry === 'string' ? entry : entry?.source;
+    const destinationRel = typeof entry === 'string' ? entry : entry?.destination;
+    if (!sourceRel || !destinationRel || path.isAbsolute(sourceRel) || path.isAbsolute(destinationRel) || sourceRel.includes('..') || destinationRel.includes('..')) {
+      fail(`overlay file mapping is invalid: ${JSON.stringify(entry)}`, 'overlay-contract-break');
+    }
+    const source = path.join(root, sourceRel);
+    const destination = path.join(stage, destinationRel);
+    if (!exists(source)) fail(`overlay file missing: ${sourceRel}`, 'overlay-contract-break');
+    const destinationParent = path.dirname(destination);
+    await fs.mkdir(destinationParent, { recursive: true });
+    const stat = await fs.lstat(source);
+    if (!stat.isFile() || stat.isSymbolicLink()) fail(`overlay file is not a regular file: ${sourceRel}`, 'overlay-contract-break');
+    await fs.copyFile(source, destination);
+    copied.push({ source: sourceRel, destination: destinationRel });
+  }
   for (const rel of manifest.patches || []) {
     const patch = path.join(root, rel);
     if (!exists(patch)) fail(`overlay patch missing: ${rel}`);
@@ -51,19 +69,15 @@ export async function applyOverlay(stage, config, profile, sourceVersion) {
     run('git', ['apply', patch], { cwd: stage, env: gitEnv });
     applied.push(rel);
   }
-  // The Android resource-proxy template already contains its mobile entry changes. The title import is kept as
-  // a small anchor edit because upstream title.js legitimately changes its surrounding imports between releases.
-  if (manifest.id === 'connect') {
-    const title = path.join(stage, 'public', 'js', 'screens', 'title.js');
-    if (exists(title)) {
-      let text = await fs.readFile(title, 'utf8');
-      const oldImport = "import { androidBridge, isLoopbackHost, normalizeRemoteUrl, probeRemoteGame } from '../connect.js';";
-      const newImport = "import { androidBridge, clearRemoteProxy, configureRemoteProxy, isLoopbackHost, normalizeRemoteUrl, probeRemoteGame } from '../connect.js';";
-      if (text.includes(oldImport)) text = text.replace(oldImport, newImport);
-      else if (!text.includes(newImport)) fail('overlay contract anchor missing: title.js connect import', 'overlay-contract-break');
-      await fs.writeFile(title, text);
-      applied.push('anchor:title.js remote proxy imports');
-    }
+  for (const anchor of manifest.anchors || []) {
+    const target = path.join(stage, anchor.path);
+    if (!exists(target)) fail(`overlay anchor file missing: ${anchor.path}`, 'overlay-contract-break');
+    let text = await fs.readFile(target, 'utf8');
+    const count = text.split(anchor.find).length - 1;
+    if (count !== 1) fail(`overlay anchor must match exactly once: ${anchor.path} → ${anchor.find}`, 'overlay-contract-break');
+    text = text.replace(anchor.find, anchor.replace ?? '');
+    await fs.writeFile(target, text);
+    anchors.push({ path: anchor.path, find: anchor.find });
   }
   await verifyContracts(stage, manifest);
   for (const forbidden of manifest.forbiddenPaths || []) {
@@ -71,5 +85,5 @@ export async function applyOverlay(stage, config, profile, sourceVersion) {
     const hit = await forbiddenContent(stage, forbidden);
     if (hit) fail(`overlay contains forbidden token "${forbidden}" in ${hit}`);
   }
-  return { id: manifest.id, version: manifest.version, applied, files: manifest.requiredPaths || [] };
+  return { id: manifest.id, version: manifest.version, applied, copied, anchors, files: manifest.requiredPaths || [] };
 }

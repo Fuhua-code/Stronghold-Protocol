@@ -1,22 +1,43 @@
 {
   "id": "connect",
-  "version": "1.0.0",
-  "sourceVersion": { "min": "0.2.1", "maxMajor": 0, "maxMinor": 2 },
-  "patches": ["patches/01-remote.patch", "patches/02-resource-proxy.patch"],
-  "requiredPaths": [
-    "public/js/connect.js",
-    "public/js/screens/title.js",
-    "public/js/screens/lobby.js",
-    "public/js/ui/guide.js",
-    "shared/connect.js",
-    "server/index.js",
-    "test/remote-probe.test.js",
-    "mobile/node/main.js"
+  "version": "1.1.0",
+  "sourceVersion": { "min": "0.2.2", "maxMajor": 0, "maxMinor": 2 },
+  "patches": [],
+  "files": [
+    { "source": "files/shared/connect.js", "destination": "shared/connect.js" },
+    { "source": "files/public/js/connect.js", "destination": "public/js/connect.js" },
+    { "source": "files/server/http/remote.js", "destination": "server/http/remote.js" }
   ],
+  "anchors": [
+    { "path": "server/http/routes.js", "find": "import { setSecurityHeaders, sendError, sendJson, splitUrl } from './common.js';", "replace": "import { setSecurityHeaders, sendError, sendJson, splitUrl } from './common.js';\nimport { createRemoteRouter } from './remote.js';" },
+    { "path": "server/http/routes.js", "find": "    build: buildTag(),\n    sockets: network.connectionCount, sessions: registry.size, ...lobby.stats(),", "replace": "    build: buildTag(), compat: `${APP_VERSION}:${PROTOCOL_VERSION}`, assets: 'manifest',\n    sockets: network.connectionCount, sessions: registry.size, ...lobby.stats()," },
+    { "path": "server/http/routes.js", "find": "export function createRequestHandler({ serveStatic, health, log }) {", "replace": "export function createRequestHandler({ serveStatic, health, remote, log }) {\n  const handleRemote = remote?.handler || createRemoteRouter(remote || {});" },
+    { "path": "server/http/routes.js", "find": "    if (parts.rawPath === '/healthz') {", "replace": "    if (await handleRemote(req, res, parts)) return;\n    if (parts.rawPath === '/healthz') {" },
+    { "path": "server/index.js", "find": "  const server = http.createServer(createRequestHandler({ serveStatic, health: { startedAt, network, registry, lobby }, log }));", "replace": "  const proxy = { target: null };\n  const server = http.createServer();\n  server.on('request', createRequestHandler({ serveStatic, health: { startedAt, network, registry, lobby }, remote: { host, getPort: () => { const address = server.address(); return typeof address === 'object' && address ? address.port : port; }, proxy }, log }));" },
+    { "path": "server/index.js", "find": "  const wss = attachWebSocket(server, { network, log });", "replace": "  const wss = attachWebSocket(server, { network, log, wsProxy: !!opts.wsProxy, proxy });" },
+    { "path": "server/http/websocket.js", "find": "import { WebSocketServer } from 'ws';", "replace": "import { WebSocket, WebSocketServer } from 'ws';" },
+    { "path": "server/http/websocket.js", "find": "export function attachWebSocket(server, { network, log }) {", "replace": "export function attachWebSocket(server, { network, log, wsProxy = false, proxy = null }) {" },
+    { "path": "server/http/websocket.js", "find": "  server.on('upgrade', (req, socket, head) => {", "replace": "  const proxyWss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD, perMessageDeflate: false });\n  const proxyUpgrade = (req, socket, head) => {\n    if (!proxy?.target) return false;\n    try {\n      proxyWss.handleUpgrade(req, socket, head, (local) => {\n        const upstream = new WebSocket(proxy.target, { handshakeTimeout: 8000, maxPayload: WS_MAX_PAYLOAD });\n        const close = () => { try { local.close(); } catch {} try { upstream.terminate(); } catch {} };\n        local.on('message', (data, isBinary) => { if (upstream.readyState === WebSocket.OPEN) upstream.send(data, { binary: isBinary }); });\n        local.on('close', close); local.on('error', close);\n        upstream.on('message', (data, isBinary) => { if (local.readyState === WebSocket.OPEN) local.send(data, { binary: isBinary }); });\n        upstream.on('error', close); upstream.on('close', close);\n      });\n      return true;\n    } catch (error) { log.error('[ws] proxy upgrade failed', error); try { socket.destroy(); } catch {} return true; }\n  };\n\n  server.on('upgrade', (req, socket, head) => {" },
+    { "path": "server/http/websocket.js", "find": "    if (!parts || parts.rawPath !== '/ws') { reject(404, 'Not Found'); return; }", "replace": "    if (parts?.rawPath === '/ws' && wsProxy && proxyUpgrade(req, socket, head)) return;\n    if (!parts || parts.rawPath !== '/ws') { reject(404, 'Not Found'); return; }" },
+    { "path": "public/js/ui/guide.js", "find": "export const guideStore = createStore({ open: false, page: 0 });", "replace": "export const guideStore = createStore({ open: false, page: 0, kind: 'play' });" },
+    { "path": "public/js/ui/guide.js", "find": "  guideStore.set({ open: true, page: Math.max(0, page | 0) });", "replace": "  guideStore.set({ open: true, page: Math.max(0, page | 0), kind: 'play' });" },
+    { "path": "public/js/ui/guide.js", "find": "function preload(url) {", "replace": "export function RemoteGuideButton({ class: cls, size = 'sm', variant = 'ghost' }) {\n  return html`<${Button} variant=${variant} size=${size} icon=\"book\" class=${cx('guide-btn', cls)} onClick=${() => guideStore.set({ open: true, page: 0, kind: 'remote' })} title=\"远程指南\" aria-label=\"远程指南\">远程指南<//>`;\n}\n\nfunction RemoteGuidePanel() {\n  const [info, setInfo] = useState(null);\n  useEffect(() => { fetch('/connect/info', { cache: 'no-store' }).then((r) => r.ok ? r.json() : null).then(setInfo).catch(() => setInfo(null)); }, []);\n  return html`<div class=\"guide__stage guide__stage--text\"><div class=\"guide__tips remote-guide\"><${MicroLabel} tone=\"mint\">REMOTE // 联机指南<//><p>同一局域网内请将本机服务监听在局域网地址，并把显示的地址提供给其他玩家；公网联机请使用支持 WebSocket 的内网穿透或 HTTPS 服务。</p>${info?.lan?.map((url) => html`<code key=${url} class=\"num\">${url}</code>`) || html`<span class=\"t-lo\">请在本机浏览器访问标题页后查看局域网地址。</span>`}<p>远程地址会先校验健康接口、版本和 WebSocket；证书或验证页需要在 Android 远程页面中由用户确认。</p></div></div>`;\n}\n\nfunction preload(url) {" },
+    { "path": "public/js/ui/guide.js", "find": "  const { open, page } = useStore((s) => s, Object.is, guideStore);", "replace": "  const { open, page, kind } = useStore((s) => s, Object.is, guideStore);" },
+    { "path": "public/js/ui/guide.js", "find": "  if (!open) return null;", "replace": "  if (!open) return null;\n  if (kind === 'remote') return html`<div class=\"guide\" role=\"presentation\" onMouseDown=${(e) => { if (e.target === e.currentTarget) closeGuide(); }}><div class=\"guide__box brackets\" role=\"dialog\" aria-modal=\"true\"><header class=\"guide__head\"><div class=\"guide__titles\"><${MicroLabel} tone=\"mint\">REMOTE GUIDE // CONNECTIVITY<//><h2 class=\"guide__title\">远程指南</h2></div><button type=\"button\" class=\"guide__close\" onClick=${closeGuide} aria-label=\"关闭\"><${Icon} name=\"close\" /></button></header><${RemoteGuidePanel} /></div></div>`;" },
+    { "path": "public/js/screens/title.js", "find": "import { GuideButton } from '../ui/guide.js';", "replace": "import { GuideButton } from '../ui/guide.js';\nimport { androidBridge, normalizeRemoteUrl, probeRemoteGame } from '../connect.js';" },
+    { "path": "public/js/screens/title.js", "find": "/** Title screen component. */", "replace": "async function openRemoteFromPrompt() {\n  const raw = globalThis.prompt?.('远程游戏地址', 'https://');\n  const url = normalizeRemoteUrl(raw);\n  if (!url) { globalThis.alert?.('请输入有效的 HTTP 或 HTTPS 游戏地址'); return; }\n  const result = await probeRemoteGame(url);\n  if (!result.valid) { globalThis.alert?.(`远程服务不可用：${result.reason || '校验失败'}`); return; }\n  const bridge = androidBridge();\n  if (bridge?.openRemote) bridge.openRemote(url); else if (typeof location !== 'undefined') location.href = url;\n}\n\n/** Title screen component. */" },
+    { "path": "public/js/screens/title.js", "find": "          <${GuideButton} class=\"title-guide\" label=${t('玩法说明')} />", "replace": "          <${GuideButton} class=\"title-guide\" label=${t('玩法说明')} />\n          <${Button} variant=\"ghost\" size=\"sm\" icon=\"globe\" onClick=${openRemoteFromPrompt} title=\"远程联机\">远程<//>" },
+    { "path": "public/js/screens/lobby.js", "find": "import { GuideButton } from '../ui/guide.js';", "replace": "import { GuideButton, RemoteGuideButton } from '../ui/guide.js';\nimport { isLoopbackHost } from '../connect.js';" },
+    { "path": "public/js/screens/lobby.js", "find": "        <${GuideButton} class=\"lobby-guide\" variant=\"secondary\" label=${t('玩法说明')} />", "replace": "        <${GuideButton} class=\"lobby-guide\" variant=\"secondary\" label=${t('玩法说明')} />\n        ${isLoopbackHost() ? html`<${RemoteGuideButton} class=\"lobby-remote-guide\" variant=\"secondary\" />` : null}" }
+  ],
+  "requiredPaths": ["public/js/connect.js", "public/js/screens/title.js", "public/js/screens/lobby.js", "public/js/ui/guide.js", "shared/connect.js", "server/http/remote.js", "server/http/routes.js", "server/http/websocket.js", "server/index.js", "mobile/node/main.js"],
   "requiredMarkers": [
     { "path": "public/js/screens/title.js", "text": "androidBridge" },
-    { "path": "server/index.js", "text": "/connect/probe" },
-    { "path": "server/index.js", "text": "/healthz" },
+    { "path": "public/js/ui/guide.js", "text": "RemoteGuideButton" },
+    { "path": "server/http/remote.js", "text": "/connect/probe" },
+    { "path": "server/http/routes.js", "text": "/healthz" },
+    { "path": "server/http/websocket.js", "text": "wsProxy" },
+    { "path": "server/http/remote.js", "text": "probeRemoteGame" },
     { "path": "mobile/node/main.js", "text": "wsProxy" }
   ],
   "forbiddenPaths": ["turn-space", "HF_TOKEN", "FastRTC"]

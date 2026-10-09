@@ -17,8 +17,8 @@ test('profiles keep pure master separate from connect overlay', () => {
 test('connect overlay declares an explicit supported source range and contracts', () => {
   const m = JSON.parse(fs.readFileSync(path.join(root, 'overlays', 'connect', 'manifest.json')));
   assert.equal(m.sourceVersion.maxMinor, 2);
-  assert.ok(m.patches.length >= 2);
-  assert.ok(m.requiredMarkers.some((x) => x.path === 'server/index.js' && x.text === '/healthz'));
+  assert.ok(Array.isArray(m.files) || Array.isArray(m.patches));
+  assert.ok(m.requiredMarkers.some((x) => x.path === 'server/http/routes.js' && x.text === '/healthz'));
 });
 
 test('packager manifest owns the independent packager version', () => {
