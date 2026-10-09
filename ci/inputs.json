@@ -4,6 +4,13 @@
   "assets": {
     "bundles": [
       {
+        "sourceVersion": "0.2.2",
+        "priority": 10,
+        "tag": "android-assets-0.2.2",
+        "file": "stronghold-assets-0.2.2.tar.gz",
+        "sha256": "12de8b0f061d05aafa941143ae835c75fbc638263fd4b872aafcd572e6c179a5"
+      },
+      {
         "sourceVersion": "0.2.1",
         "priority": 0,
         "tag": "android-assets-0.2.1",
