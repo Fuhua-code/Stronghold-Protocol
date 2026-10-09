@@ -20,7 +20,6 @@ export async function stageSource(config, stage) {
     if (rel === 'public/vendor' || rel.startsWith('public/vendor/')) return false;
     if (rel === 'public/assets' || rel.startsWith('public/assets/')) return false;
     if (rel === 'public/fonts' || rel.startsWith('public/fonts/')) return false;
-    if (rel === 'data/local-assets.json') return false;
     return true;
   }});
   await fs.mkdir(path.join(stage, 'node_modules'), { recursive: true });
@@ -37,7 +36,6 @@ export async function stageSource(config, stage) {
   const assetCandidates = [
     [path.join(assetRoot, 'public', 'assets'), path.join(stage, 'public', 'assets')],
     [path.join(assetRoot, 'public', 'fonts'), path.join(stage, 'public', 'fonts')],
-    [path.join(assetRoot, 'data', 'local-assets.json'), path.join(stage, 'data', 'local-assets.json')],
   ];
   for (const [from, to] of assetCandidates) {
     if (exists(from)) {

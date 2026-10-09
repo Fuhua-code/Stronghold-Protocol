@@ -86,7 +86,7 @@ jobs:
         run: node ci/upstream-check.mjs
       - name: Overlay preflight before downloading large inputs
         run: node ci/compat.mjs
-      - name: Pin-verified assets and runtime
+      - name: Content-verified assets and pinned runtime
         env:
           APP_VERSION: ${{ steps.upstream.outputs.version }}
         run: node ci/inputs.mjs
@@ -200,7 +200,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           UPSTREAM_SHA: ${{ needs.detect.outputs.sha }}
           RUN_SUCCEEDED: ${{ needs.publish.result == 'success' || (needs.build.result == 'success' && (github.event_name == 'push' || inputs.dry_run == true)) }}
-          FAILURE_STAGE: ${{ needs.publish.result == 'failure' && 'release-failure' || needs.detect.result == 'failure' && 'upstream-check-failure' || 'toolchain/runtime-failure' }}
+          FAILURE_STAGE: ${{ needs.publish.result == 'failure' && 'release-failure' || 'toolchain/runtime-failure' }}
         run: node ci/notify.mjs
       - name: Mark any blocked run failed
         if: needs.detect.result == 'failure' || needs.build.result == 'failure' || needs.build.result == 'cancelled' || needs.publish.result == 'failure' || needs.publish.result == 'cancelled'

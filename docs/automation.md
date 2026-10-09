@@ -26,9 +26,9 @@ Actions → Upstream connect APK → Run workflow。`upstream_sha` 留空检查�
 
 检查/构建 job 只有 `contents: read`；发布 job 有 `contents: write`；报告 job 有 `issues: write`。管理员需允许 Actions 创建 Release/Issue。失败 Issue 的通知遵循你的 GitHub 通知设置，可在仓库 Watch 中启用 Issues，并在 GitHub Notifications 中启用 Actions 失败通知。
 
-## 固定资源与 runtime
+## 可复用资源与 runtime
 
-冷 runner 从公开专用 Release 恢复完整资源与 Termux runtime，随后按提交在 `ci/inputs.json` 的 SHA256 和包内逐文件清单检查。既不信任同次下载的 checksum 来替代代码中的 pin，也不依赖本机缓存。资源清单必须和选定上游提交的 `data/assets.json` 字节一致；字体、3D、本地素材与 `local-assets.json` 共同检查。新版本没有已准备好的资源包时自动停止并报告。
+冷 runner 从公开专用 Release 恢复资源 bundle 与 Termux runtime，随后按 `ci/inputs.json` 中的归档 SHA256 和 bundle 内逐文件清单检查。资源 bundle 不再按游戏版本精确绑定，也不要求其中的 `data/assets.json` 与上游字节级一致；打包器会读取当前上游的 `data/assets.json` 和 `data/local-assets.json`，选择完整覆盖其引用资源的 bundle。bundle 可以包含额外资源，清单格式或顺序变化不会阻断构建。归档损坏、文件哈希不匹配、路径不安全或当前上游有资源缺失仍会停止并报告具体路径。
 
 维护者在本机已验证的资源目录上准备新包：
 
@@ -37,7 +37,9 @@ node ci/make-input.mjs assets <完整资源目录> <游戏版本> outputs/new-as
 node ci/make-input.mjs runtime <runtime缓存目录> node24.18.0-r1 outputs/new-runtime
 ```
 
-上传 archive、`SHA256SUMS.txt`、`input-manifest.json` 至 `android-assets-<版本>` 或 `android-runtime-<runtime版本>` Release；再把生成 `pin.json` 的 tag/file/sha256 更新到 `ci/inputs.json`。已有资源 Release 不覆盖；资源变化时创建新的带修订号 tag。runtime 含原始 Node/native libraries、固定签名 Termux InRelease/index、deb 与许可文件；构建仍用仓库固定 Termux 公钥校验索引。新 runtime 必须更新版本与哈希。
+上传 archive、`SHA256SUMS.txt`、`input-manifest.json` 至资源或 runtime Release；在 `ci/inputs.json` 的 `assets.bundles` 中追加 tag/file/sha256，可选填 `sourceVersion` 和 `priority`。已有 bundle 不覆盖；资源变化时创建新的 bundle。runtime 仍使用固定版本与哈希，包含原始 Node/native libraries、固定签名 Termux InRelease/index、deb 与许可文件；构建仍用仓库固定 Termux 公钥校验索引。新 runtime 必须更新版本与哈希。
+
+如果没有任何 bundle 完整覆盖当前上游清单，工作流会分类为 `asset-missing-or-mismatch`，报告候选 bundle 的覆盖率和缺失路径；它不会生成一个缺少素材的 APK，也不需要修改打包器代码来支持新版本。
 
 Linux runner 使用 Ubuntu 22.04、Node 22.22.0、Temurin 17.0.14+7、SDK build-tools 35.0.0、android-35、系统 GnuPG/tar/xz。Actions 依赖按 commit SHA 固定；JDK 发行版与 SDK 版本由固定 Actions/官方安装源供应。完整资源约 555 MB、压缩输入约 421 MB，APK 为数百 MB；runner 至少应有约 8 GB 可用空间。工作流构建上限 75 分钟，下载上限 10 分钟；失败保留日志和报告，不上传 staging、keystore 或未签名 APK。
 
@@ -47,7 +49,7 @@ Linux runner 使用 Ubuntu 22.04、Node 22.22.0、Temurin 17.0.14+7、SDK build-
 | --- | --- |
 | `overlay-contract-break` | 补丁冲突、版本范围或 marker 变化；这是破坏性更新，人工适配覆盖层 |
 | `upstream-test-failure` | 上游或注入后测试/服务检查失败 |
-| `asset-missing-or-mismatch` | 准备对应版本资源 Release，或核对 manifest/hash |
+| `asset-missing-or-mismatch` | 准备能覆盖当前清单的资源 bundle，或核对 manifest/hash |
 | `toolchain/runtime-failure` | 检查 SDK、固定 runtime 输入、下载服务、磁盘容量 |
 | `signing-failure` | 核对 Secret、alias、证书；不要更换签名身份 |
 | `apk-verification-failure` | 排查包内源码、资源、版本、ELF 或解包启动检查 |

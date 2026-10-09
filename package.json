@@ -1,6 +1,6 @@
 {
   "name": "stronghold-protocol-packager",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Independent offline-first Android packager for Stronghold Protocol master worktrees",

@@ -27,6 +27,7 @@ if (kind === 'assets') {
   }
 }
 const files = await fileManifest(root);
+// version is provenance metadata for diagnostics; consumers select asset bundles by content coverage.
 const manifest = { schema: 1, kind, version, files, totalBytes: files.reduce((a,f) => a + f.bytes, 0) };
 await writeJson(path.join(root, 'input-manifest.json'), manifest);
 const name = `stronghold-${kind}-${version}.tar.gz`; const archive = path.resolve(destination, name);

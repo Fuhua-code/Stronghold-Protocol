@@ -17,4 +17,4 @@ try {
   } else {
     await outputs({ skip: false }); console.log(`New upstream commit: ${sha}`);
   }
-} catch (e) { await failure('upstream-check-failure', e); process.exitCode = 1; }
+} catch (e) { await failure('toolchain/runtime-failure', e); process.exitCode = 1; }

@@ -22,6 +22,14 @@ async function forbiddenContent(stage, token) {
   return walk(stage);
 }
 
+export async function verifyContracts(stage, manifest) {
+  for (const rel of manifest.requiredPaths || []) if (!exists(path.join(stage, rel))) fail(`overlay contract path missing after patch: ${rel}`, 'overlay-contract-break');
+  for (const marker of manifest.requiredMarkers || []) {
+    const file = path.join(stage, marker.path); const text = await fs.readFile(file, 'utf8');
+    if (!text.includes(marker.text)) fail(`overlay contract marker missing: ${marker.path} → ${marker.text}`, 'overlay-contract-break');
+  }
+}
+
 export async function applyOverlay(stage, config, profile, sourceVersion) {
   if (!profile.overlay) return { id: null, applied: [], files: [] };
   const root = path.join(PACKAGER, 'overlays', profile.overlay);
@@ -57,11 +65,7 @@ export async function applyOverlay(stage, config, profile, sourceVersion) {
       applied.push('anchor:title.js remote proxy imports');
     }
   }
-  for (const rel of manifest.requiredPaths || []) if (!exists(path.join(stage, rel))) fail(`overlay contract path missing after patch: ${rel}`, 'overlay-contract-break');
-  for (const marker of manifest.requiredMarkers || []) {
-    const file = path.join(stage, marker.path); const text = await fs.readFile(file, 'utf8');
-    if (!text.includes(marker.text)) fail(`overlay contract marker missing: ${marker.path} → ${marker.text}`, 'overlay-contract-break');
-  }
+  await verifyContracts(stage, manifest);
   for (const forbidden of manifest.forbiddenPaths || []) {
     if (exists(path.join(stage, forbidden))) fail(`overlay contains forbidden path: ${forbidden}`);
     const hit = await forbiddenContent(stage, forbidden);

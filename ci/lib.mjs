@@ -77,7 +77,8 @@ export async function outputs(values) {
 }
 
 export async function failure(stage, error, meta = {}) {
-  const code = error.code && error.code !== 'PACKAGER_ERROR' ? error.code : stage;
+  const categories = ['upstream-test-failure','overlay-contract-break','asset-missing-or-mismatch','toolchain/runtime-failure','signing-failure','apk-verification-failure','release-failure'];
+  const code = categories.includes(error.code) ? error.code : stage;
   const report = { status: 'failed', code, stage, breaking: code === 'overlay-contract-break', ...meta, message: redact(error.message || error).slice(-4000), runUrl: process.env.GITHUB_RUN_ID ? `https://github.com/${REPO}/actions/runs/${process.env.GITHUB_RUN_ID}` : null };
   await writeJson('outputs/automation-failure.json', report);
   console.error(`${code}: ${report.message}`);

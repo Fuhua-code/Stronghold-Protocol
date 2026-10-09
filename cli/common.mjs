@@ -15,14 +15,14 @@ export function resolveFrom(base, value) { return path.resolve(base, value || '.
 export function fail(message, code = 'PACKAGER_ERROR') { const e = new Error(message); e.code = code; throw e; }
 
 export function classifyBuildFailure(error) {
-  if (error?.code && error.code !== 'PACKAGER_ERROR') return error.code;
+  if (['overlay-contract-break','asset-missing-or-mismatch','signing-failure','apk-verification-failure','toolchain/runtime-failure','upstream-test-failure','release-failure'].includes(error?.code)) return error.code;
   const text = String(error?.message || error).toLowerCase();
   if (/overlay patch conflict|overlay contract|does not support master|contract marker/.test(text)) return 'overlay-contract-break';
   if (/asset manifest|assets\.json|local-assets|asset archive|resource manifest/.test(text)) return 'asset-missing-or-mismatch';
   if (/keystore|signing|certificate sha-256|key alias|password/.test(text)) return 'signing-failure';
   if (/apk verification|apk checker|signature|dt_needed|unresolved/.test(text)) return 'apk-verification-failure';
   if (/runtime|toolchain|android sdk|build-tools|jdk|aapt2|d8|zipalign|apksigner/.test(text)) return 'toolchain/runtime-failure';
-  return 'apk-build-failure';
+  return 'toolchain/runtime-failure';
 }
 
 export function sanitizeDiagnostic(value) {

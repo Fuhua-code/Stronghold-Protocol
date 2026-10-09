@@ -1,6 +1,6 @@
 {
   "name": "stronghold-protocol-packager",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "schemaVersion": 1,
   "profiles": ["master", "connect"],
   "description": "Independent staging and Android APK packaging contract"
