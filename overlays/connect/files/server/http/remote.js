@@ -29,7 +29,7 @@ function fingerprint(root, inputs, exclude = new Set()) {
 
 export function remoteHealth(root = ROOT) {
   return { protocol: PROTOCOL_VERSION,
-    compat: fingerprint(root, ['shared', 'server/net.js', 'server/lobby.js', 'server/match', 'server/sim', 'public/js', 'data'],
+    compat: fingerprint(root, ['shared', 'server', 'public/js', 'data'],
       new Set(['data/assets.json', 'data/local-assets.json'])),
     assets: fingerprint(root, ['data/assets.json', 'data/local-assets.json']) };
 }
@@ -128,7 +128,8 @@ export function createRemoteRouter({ host, getPort, proxy, wsProxy = false, fing
     }
     if (parts.rawPath === '/connect/info') {
       const port = Number(getPort?.() || 0);
-      sendJson(req, res, 200, { ok: true, port, lan: lanUrls(port), lanAvailable: !isLoopbackHost(host), proxyActive: !!proxy?.target }); return true;
+      const lanAvailable = host === '0.0.0.0' || host === '::' || !isLoopbackHost(host);
+      sendJson(req, res, 200, { ok: true, port, lan: lanUrls(port), lanAvailable, proxyActive: !!proxy?.target }); return true;
     }
     const raw = new URLSearchParams(parts.query).get('url') || '';
     if (parts.rawPath === '/sp-remote') {

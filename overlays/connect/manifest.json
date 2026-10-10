@@ -1,6 +1,6 @@
 {
   "id": "connect",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "sourceVersion": {
     "min": "0.2.2",
     "maxMajor": 0,

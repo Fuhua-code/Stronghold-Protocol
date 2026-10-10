@@ -38,12 +38,13 @@ test('strict probe checks numeric protocol, compatibility, assets, game page and
 });
 
 test('control routes reject LAN callers, hostile Origin and disabled proxy; validate before changing target',async()=>{
-  const proxy=createProxyState();const router=createRemoteRouter({proxy,wsProxy:true,probe:async()=>({proxyable:false,reason:'version-mismatch'})});
+  const proxy=createProxyState();const router=createRemoteRouter({host:'0.0.0.0',getPort:()=>3000,proxy,wsProxy:true,probe:async()=>({proxyable:false,reason:'version-mismatch'})});
   async function call(address,url,origin){
     const req={method:'GET',socket:{remoteAddress:address},headers:{host:'127.0.0.1:3000',...(origin?{origin}:{})}};
     const res={setHeader(){},writeHead(status){this.statusCode=status;},end(v){this.body=JSON.parse(v);}};
     const u=new URL(url,'http://local/');await router(req,res,{rawPath:u.pathname,query:u.search.slice(1)});return res;
   }
+  assert.equal((await call('127.0.0.1','/connect/info')).body.lanAvailable,true);
   assert.equal((await call('192.168.0.2','/sp-remote?url=https://game.test')).statusCode,403);
   assert.equal((await call('127.0.0.1','/sp-remote?url=https://game.test','https://evil.test')).statusCode,403);
   assert.equal((await call('127.0.0.1','/sp-remote?url=https://game.test')).statusCode,409);assert.equal(proxy.target,null);
@@ -83,7 +84,7 @@ test('injected upstream server preserves health, static resources and normal hel
     const health=await (await fetch(`${server.url}/healthz`)).json();assert.equal(health.app,APP_VERSION);assert.equal(health.version,PROTOCOL_VERSION);assert.equal(health.protocol,PROTOCOL_VERSION);assert.match(health.compat,/^[a-f0-9]{64}$/);
     assert.equal((await fetch(`${server.url}/`)).status,200);
     assert.equal((await fetch(`${server.url}/js/connect.js`)).status,200);
-    const info=await (await fetch(`${server.url}/connect/info`)).json();assert.equal(info.port,server.port);assert.ok(Array.isArray(info.lan));
+    const info=await (await fetch(`${server.url}/connect/info`)).json();assert.equal(info.port,server.port);assert.ok(Array.isArray(info.lan));assert.equal(info.lanAvailable,false);
     assert.equal((await fetch(`${server.url}/sp-remote?url=`)).status,404);
     client=new WebSocket(server.url.replace('http:','ws:')+'/ws');client.on('error',()=>{});await once(client,'open');const welcome=once(client,'message');client.send(JSON.stringify({t:'hello',rid:1,name:'Doctor',version:PROTOCOL_VERSION}));assert.equal(JSON.parse((await welcome)[0]).t,'welcome');
   } finally {client?.terminate();await server.close();}
