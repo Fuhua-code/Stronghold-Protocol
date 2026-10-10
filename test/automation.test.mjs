@@ -7,7 +7,7 @@ import { allocateVersion } from '../ci/version.mjs';
 import { fileManifest, safePath, redact, api, releaseMeta, META_PREFIX } from '../ci/lib.mjs';
 import { verifyBundle, archivePaths, collectAssetReferences, assessCoverage, selectAssets } from '../ci/inputs.mjs';
 import { stageSource } from '../cli/source.mjs';
-import { validateReport } from '../ci/publish.mjs';
+import { validateReport, resourceMetadata } from '../ci/publish.mjs';
 import { classifyBuildFailure, run } from '../cli/common.mjs';
 import { reportIssue } from '../ci/notify.mjs';
 import { applyOverlay, verifyContracts } from '../cli/overlay.mjs';
@@ -172,4 +172,10 @@ test('unsupported upstream and absent markers are breaking contracts; unsafe ass
     await fs.mkdir(path.join(root,'data'));await fs.writeFile(path.join(root,'data/assets.json'),JSON.stringify(['/assets/%2e%2e/private']));
     await assert.rejects(()=>checkAssets(root),e=>e.code==='asset-missing-or-mismatch');
   } finally { await fs.rm(root,{recursive:true,force:true}); }
+});
+
+test('Release metadata supports selected multipart resource bundles',()=>{
+  const m=resourceMetadata({schema:2,selected:{id:'bundle',input:{manifestSha256:'abc',parts:[{file:'a.tgz',sha256:'def'}]}},runtime:{sha256:'runtime'}});
+  assert.equal(m.assetsSha256,'abc');assert.equal(m.assetParts[0].sha256,'def');
+  assert.equal(resourceMetadata({assets:{sha256:'legacy'},runtime:{sha256:'r'}}).assetsSha256,'legacy');
 });

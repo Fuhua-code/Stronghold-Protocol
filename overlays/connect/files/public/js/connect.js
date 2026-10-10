@@ -1,5 +1,5 @@
-import { isLoopbackHost, normalizeRemoteUrl } from '../../../shared/connect.js';
-export { isLoopbackHost, normalizeRemoteUrl } from '../../../shared/connect.js';
+import { isLoopbackHost, normalizeRemoteUrl } from '../../shared/connect.js';
+export { isLoopbackHost, normalizeRemoteUrl } from '../../shared/connect.js';
 
 export function androidBridge() {
   return typeof window !== 'undefined' ? window.SP_BRIDGE || null : null;

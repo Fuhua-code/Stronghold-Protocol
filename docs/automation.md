@@ -60,3 +60,7 @@ Linux runner 使用 Ubuntu 22.04、Node 22.22.0、Temurin 17.0.14+7、SDK build-
 ## 分支与 Pages
 
 默认分支变为 `main` 后，现有 PR 的目标分支无需改变。`master` 应由维护者快进同步上游；APK Actions 不修改它。Pages 继续保留在 `feat/github-pages-standalone`。`main` 保留 Pages 的手动部署工作流入口，它显式 checkout Pages 分支；Pages 分支的 push 触发也继续有效。游戏源码不会合并进 `main`。
+
+上游完整测试在原始临时 checkout 中运行。注入后的 staging 运行专门的联机集成测试，验证健康兼容字段、地址校验、代理控制权限、WebSocket 首包排队、文本/二进制转发、清理及用户确认回退；不在无 Git 元数据且只含运行时依赖的 staging 中重复执行 Git/开发工具检查。完整注入测试日志写入构建诊断产物。
+
+覆盖层 1.1.1 支持上游 0.2.2 起的模块化 HTTP/WebSocket 入口。标题页仅对 loopback 注入本地/远程按钮，非本机入口保留上游开始按钮；安卓远程指南位于标题页。本机资源代理须通过应用、数字协议、内容兼容指纹、首页与 WebSocket 校验。旧服务器缺少兼容字段时需要用户确认进入远端完整页面。

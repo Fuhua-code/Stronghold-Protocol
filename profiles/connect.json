@@ -10,7 +10,7 @@
     "public/js/ui/guide.js",
     "shared/connect.js",
     "server/index.js",
-    "test/remote-probe.test.js",
+    "test/remote-overlay.test.mjs",
     "mobile/node/main.js"
   ]
 }

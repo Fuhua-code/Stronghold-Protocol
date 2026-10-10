@@ -45,7 +45,7 @@ export function run(command, args = [], { cwd = PACKAGER, env = {}, capture = tr
   return { ok: r.status === 0, status: r.status, out };
 }
 
-export async function copyTree(source, destination, { filter = () => true } = {}) {
+export async function copyTree(source, destination, { filter = () => true, root = source } = {}) {
   if (!exists(source)) fail(`missing source path: ${source}`);
   const stat = await fsp.lstat(source);
   if (stat.isSymbolicLink()) fail(`symbolic link is not allowed in staging: ${source}`);
@@ -53,9 +53,9 @@ export async function copyTree(source, destination, { filter = () => true } = {}
   await fsp.mkdir(destination, { recursive: true });
   for (const entry of await fsp.readdir(source, { withFileTypes: true })) {
     const src = path.join(source, entry.name); const dst = path.join(destination, entry.name);
-    const rel = path.relative(source, src);
+    const rel = path.relative(root, src).split(path.sep).join('/');
     if (!filter(src, rel, entry)) continue;
-    if (entry.isDirectory()) await copyTree(src, dst, { filter });
+    if (entry.isDirectory()) await copyTree(src, dst, { filter, root });
     else if (entry.isFile()) { await fsp.mkdir(path.dirname(dst), { recursive: true }); await fsp.copyFile(src, dst); }
     else if (entry.isSymbolicLink()) fail(`symbolic link is not allowed in staging: ${src}`);
   }

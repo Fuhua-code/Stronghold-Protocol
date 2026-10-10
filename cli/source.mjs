@@ -43,5 +43,9 @@ export async function stageSource(config, stage) {
     }
   }
   for (const rel of ['public/assets', 'public/fonts']) if (!exists(path.join(stage, rel))) fail(`required asset directory is missing after staging: ${rel}`);
+  // Local art is optional upstream metadata. Supply the verified bundle's index only
+  // when upstream did not provide its own; never replace a current upstream manifest.
+  const local = 'data/local-assets.json';
+  if (!exists(path.join(stage, local)) && exists(path.join(assetRoot, local))) await fs.copyFile(path.join(assetRoot, local), path.join(stage, local));
   return stage;
 }

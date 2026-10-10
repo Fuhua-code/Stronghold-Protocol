@@ -19,8 +19,10 @@ export function normalizeRemoteUrl(raw) {
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || isLoopbackHost(url.hostname)) return null;
   if (url.port === '0') return null;
   const host = url.hostname.replace(/\.$/, '');
+  const authority = value.replace(/^https?:\/\//i, '').split(/[/?#]/)[0];
+  if (authority.endsWith(':')) return null;
+  if (host.startsWith('[')) return url.toString();
   if (/^[\d.]+$/.test(host)) {
-    const authority = value.replace(/^https?:\/\//i, '').split(/[/?#]/)[0];
     if (authority.split(':')[0] !== host) return null;
   } else {
     const labels = host.split('.');

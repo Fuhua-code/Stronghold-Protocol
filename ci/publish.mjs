@@ -11,6 +11,14 @@ export function validateReport(report, meta, cert) {
   if (!report.apk.verification?.ok || !report.apks?.length || !report.apk.runtimeDependencies?.length || report.apk.runtimeDependencies.some(r => !r.elf?.dependencies?.length || r.elf.unresolved?.length)) fail('APK, runtime or ELF verification failed', 'apk-verification-failure');
 }
 
+export function resourceMetadata(pins) {
+  const input = pins.selected?.input || pins.assets;
+  return { assetsBundle: pins.selected?.id || null,
+    assetsSha256: input?.manifestSha256 || input?.sha256 || pins.selected?.coverage?.manifestSha256 || null,
+    assetParts: input?.parts || (input?.file ? [{ file: input.file, sha256: input.sha256 }] : []),
+    runtimeSha256: pins.runtime.sha256 };
+}
+
 async function publish() {
   const meta = readJson('outputs/release-meta.json');
   const directory = path.join('outputs/apk', meta.version, 'connect');
@@ -22,8 +30,8 @@ async function publish() {
   if (history.filter(r => !r.draft).some(r => (releaseMeta(r)?.versionCode || 0) >= meta.versionCode)) fail('Release history moved; versionCode must be reallocated', 'release-failure');
   for (const apk of report.apks) if (await sha256(path.join(directory, path.basename(apk.path))) !== apk.sha256) fail('APK hash changed before publishing', 'apk-verification-failure');
   const pins = readJson('outputs/input-report.json');
-  const metadata = { ...meta, overlayVersion: report.overlay.version, assetsSha256: pins.assets.sha256, runtimeSha256: pins.runtime.sha256 };
-  const body = `联机 Android APK，支持 ARM64 手机与 x86_64 模拟器。\n\n- 游戏版本：${meta.version}\n- versionCode：${meta.versionCode}（修订 ${meta.revision}）\n- 上游提交：[${meta.sha}](https://github.com/${UPSTREAM}/commit/${meta.sha})\n- 联机覆盖层：${report.overlay.version}\n- 打包器：${report.packager.version}\n- 资源 SHA256：${pins.assets.sha256}\n- Runtime SHA256：${pins.runtime.sha256}\n- 构建：[Actions](https://github.com/${REPO}/actions/runs/${process.env.GITHUB_RUN_ID})\n\nAPK 已通过包名、版本、V1/V2/V3 签名、证书、资源、ELF 依赖及解包服务启动检查。安装命令：\`adb install -r <APK>\`。设备游戏体验需另行验收。\n\n${META_PREFIX}${JSON.stringify(metadata)} -->`;
+  const metadata = { ...meta, overlayVersion: report.overlay.version, ...resourceMetadata(pins) };
+  const body = `联机 Android APK，支持 ARM64 手机与 x86_64 模拟器。\n\n- 游戏版本：${meta.version}\n- versionCode：${meta.versionCode}（修订 ${meta.revision}）\n- 上游提交：[${meta.sha}](https://github.com/${UPSTREAM}/commit/${meta.sha})\n- 联机覆盖层：${report.overlay.version}\n- 打包器：${report.packager.version}\n- 资源 SHA256：${metadata.assetsSha256 || 'upstream-source'}\n- Runtime SHA256：${pins.runtime.sha256}\n- 构建：[Actions](https://github.com/${REPO}/actions/runs/${process.env.GITHUB_RUN_ID})\n\nAPK 已通过包名、版本、V1/V2/V3 签名、证书、资源、ELF 依赖及解包服务启动检查。安装命令：\`adb install -r <APK>\`。设备游戏体验需另行验收。\n\n${META_PREFIX}${JSON.stringify(metadata)} -->`;
   // Draft first: no partially uploaded Release becomes publicly advertised.
   const release = existing || await api(`/repos/${REPO}/releases`, { method:'POST', body:{ tag_name:meta.tag, target_commitish:process.env.PACKAGER_SHA || 'main', name:`Android ${meta.version} · ${meta.sha.slice(0,8)} · code ${meta.versionCode}`, body, draft:true, prerelease:false } });
   if (existing) await api(`/repos/${REPO}/releases/${release.id}`, { method:'PATCH', body:{ body } });
