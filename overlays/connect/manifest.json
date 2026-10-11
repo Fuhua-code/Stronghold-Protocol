@@ -1,6 +1,6 @@
 {
   "id": "connect",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "sourceVersion": {
     "min": "0.2.2",
     "maxMajor": 0,
@@ -134,8 +134,8 @@
     },
     {
       "path": "public/js/screens/lobby.js",
-      "find": "        <${GuideButton} class=\"lobby-guide\" variant=\"secondary\" label=${t('玩法说明')} />",
-      "replace": "        <${GuideButton} class=\"lobby-guide\" variant=\"secondary\" label=${t('玩法说明')} />\n        ${isLoopbackHost() && !androidBridge() ? html`<${RemoteGuideButton} class=\"lobby-remote-guide\" variant=\"secondary\" />` : null}"
+      "find": "          <${GuideButton} class=\"lobby-guide\" variant=\"secondary\" square=${true} />",
+      "replace": "          <${GuideButton} class=\"lobby-guide\" variant=\"secondary\" square=${true} />\n          ${isLoopbackHost() && !androidBridge() ? html`<${RemoteGuideButton} class=\"lobby-remote-guide\" variant=\"secondary\" />` : null}"
     },
     {
       "path": "public/js/ui/guide.js",

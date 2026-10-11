@@ -13,7 +13,7 @@ import {
   removeIfExists, run, versionCode, writeJson, sanitizeDiagnostic,
 } from './common.mjs';
 import { inspectSource, stageSource } from './source.mjs';
-import { checkAssets } from './assets.mjs';
+import { checkAssets, normalizeAssetCase } from './assets.mjs';
 import { applyOverlay } from './overlay.mjs';
 import { signingEnv, verifyCertificate } from './signing.mjs';
 import { finalizeReport } from './report.mjs';
@@ -81,6 +81,7 @@ async function build(argv = process.argv.slice(2)) {
   try {
     console.log(`Building ${profile.id} from master ${source.git.commit} (${version})`);
     await stageSource(config, stage);
+    await normalizeAssetCase(stage);
     const assets = await checkAssets(stage);
     await copyMobileTemplate(profile.mobileTemplate, stage);
     await copyRuntimeCache(config, stage);

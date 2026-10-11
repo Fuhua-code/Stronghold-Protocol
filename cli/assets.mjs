@@ -2,6 +2,44 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { exists, fail, hashTree, manifestUrls, readJson } from './common.mjs';
 
+async function normalizeResourceCase(stage, url) {
+  const parts = url.split('/').filter(Boolean).map(decodeURIComponent);
+  let current = path.join(stage, 'public');
+  for (const part of parts) {
+    const entries = await fs.readdir(current, { withFileTypes: true });
+    const exact = entries.find((entry) => entry.name === part);
+    if (exact) {
+      current = path.join(current, exact.name);
+      continue;
+    }
+    const matches = entries.filter((entry) => entry.name.toLowerCase() === part.toLowerCase());
+    if (matches.length !== 1) return false;
+    const actual = path.join(current, matches[0].name);
+    const target = path.join(current, part);
+    const temporary = path.join(current, `.packager-case-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    await fs.rename(actual, temporary);
+    await fs.rename(temporary, target);
+    current = target;
+  }
+  return true;
+}
+
+/**
+ * Android ZIP entries are case-sensitive even when the source checkout is on
+ * Windows. Normalize unique case-only mismatches in staging so an upstream
+ * manifest reference is packaged under its exact URL. The source checkout is
+ * never modified.
+ */
+export async function normalizeAssetCase(stage) {
+  const manifests = ['assets.json', 'local-assets.json'].filter((name) => exists(path.join(stage, 'data', name)));
+  const urls = [...new Set(manifests.flatMap((name) => manifestUrls(readJson(path.join(stage, 'data', name)))))];
+  const normalized = [];
+  for (const url of urls) {
+    if (await normalizeResourceCase(stage, url)) normalized.push(url);
+  }
+  return normalized;
+}
+
 export async function checkAssets(stage) {
   const manifests = ['assets.json', 'local-assets.json'].filter((name) => exists(path.join(stage, 'data', name)));
   if (!manifests.includes('assets.json')) fail('data/assets.json is missing from staged source');

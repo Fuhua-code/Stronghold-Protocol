@@ -393,7 +393,7 @@ async function hashTree(dir) {
     }
   };
   await walk(dir, '');
-  return h.digest('hex').slice(0, 16);
+  return h.digest('hex');
 }
 
 async function copyTree(from, to, { filter } = {}) {
