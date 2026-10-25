@@ -1,5 +1,7 @@
 # Local configuration and generated build state.
 packager.config.json
+workbench.config.json
+state/
 *.local.json
 .staging/
 staging/

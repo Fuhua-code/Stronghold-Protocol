@@ -1,47 +1,6 @@
 {
-  "schema": 1,
-  "legacyMaximumVersionCode": 2001,
-  "assets": {
-    "bundles": [
-      {
-        "sourceVersion": "0.2.3",
-        "priority": 20,
-        "tag": "android-assets-0.2.3",
-        "parts": [
-          {
-            "file": "stronghold-assets-0.2.3-a.tar.gz",
-            "sha256": "b7c2ca71c61157d40f9b94045a21d07067a227715bbfa5790df4f6deacc7db5e"
-          },
-          {
-            "file": "stronghold-assets-0.2.3-b.tar.gz",
-            "sha256": "e9f5b1daa9fb29e72709711009d818d8da62e449f81c76ee955256ef05cfa4c8"
-          }
-        ]
-      },
-      {
-        "sourceVersion": "0.2.2",
-        "priority": 10,
-        "tag": "android-assets-0.2.2",
-        "parts": [
-          {
-            "file": "stronghold-assets-0.2.2-a.tar.gz",
-            "sha256": "497972e2c58e8c5308d818aa37e2f429d041a6fa5f52872fc8eb0fe842dbdeef"
-          },
-          {
-            "file": "stronghold-assets-0.2.2-b.tar.gz",
-            "sha256": "c879e3ae22d119fe5589c09902c1249487141be65e8783b305d71002c753bac8"
-          }
-        ]
-      },
-      {
-        "sourceVersion": "0.2.1",
-        "priority": 0,
-        "tag": "android-assets-0.2.1",
-        "file": "stronghold-assets-0.2.1.tar.gz",
-        "sha256": "b1bff9e996a2b80257898eb454bcc022f6b5eabb9e8ab800a22e074a3c253288"
-      }
-    ]
-  },
+  "schema": 2,
+  "legacyMaximumVersionCode": 300117,
   "runtime": {
     "version": "node24.18.0-r1",
     "tag": "android-runtime-node24.18.0-r1",

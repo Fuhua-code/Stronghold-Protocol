@@ -96,6 +96,8 @@ public class MainActivity extends Activity {
     private Button actionButton;
     private Button networkButton;
     private JSONObject handshake;
+    private PreferenceStore preferences;
+    private volatile String preferenceOrigin;
 
     // -----------------------------------------------------------------------------------------------
     // activity lifecycle
@@ -153,6 +155,7 @@ public class MainActivity extends Activity {
         root = new FrameLayout(this);
         root.setBackgroundColor(BG);
 
+        preferences = new PreferenceStore(getFilesDir());
         web = new WebView(this);
         web.setBackgroundColor(BG);
         web.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -174,7 +177,20 @@ public class MainActivity extends Activity {
         // Chrome-on-Android in mobile mode: the client's feature detection (touch / coarse pointer / landscape
         // locks / the rotate hint) behaves exactly as it does on a phone browser.
         s.setUserAgentString("Mozilla/5.0 (Linux; Android " + Build.VERSION.RELEASE + "; " + Build.MODEL + ") AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
-        web.setWebViewClient(new WebViewClient());
+        web.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                preferencePage = url;
+                if (!isPreferenceOrigin(url)) disableLocalPreferences();
+            }
+
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, android.webkit.WebResourceRequest request) {
+                return !isPreferenceOrigin(request.getUrl().toString());
+            }
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, String url) { return !isPreferenceOrigin(url); }
+        });
         web.setWebChromeClient(new WebChromeClient() {
             @Override
             public boolean onConsoleMessage(android.webkit.ConsoleMessage m) {
@@ -287,12 +303,40 @@ public class MainActivity extends Activity {
         });
     }
 
+    private boolean isPreferenceOrigin(String url) {
+        try {
+            Uri u = Uri.parse(url);
+            return preferenceOrigin != null && "http".equals(u.getScheme())
+                    && "127.0.0.1".equals(u.getHost()) && u.getUserInfo() == null
+                    && preferenceOrigin.equals("http://127.0.0.1:" + u.getPort());
+        } catch (Exception e) { return false; }
+    }
+
+    private void disableLocalPreferences() {
+        preferences.setEnabled(false);
+        web.removeJavascriptInterface("SP_PREFERENCES");
+    }
+
+    private void enableLocalPreferences(String url) {
+        // Trust only the current validated Node handshake, never arbitrary loopback pages.
+        String expected = handshake == null ? null : handshake.optString("url", null);
+        if (expected == null || !expected.equals(url)) { disableLocalPreferences(); return; }
+        Uri u = Uri.parse(expected);
+        preferenceOrigin = "http://127.0.0.1:" + u.getPort();
+        preferences.setEnabled(true);
+        web.addJavascriptInterface(preferences, "SP_PREFERENCES");
+    }
+
+    private volatile String preferencePage;
+
     private void loadUrl(final String url) {
         ui.post(new Runnable() {
             @Override
             public void run() {
                 overlay.setVisibility(View.GONE);
                 web.setVisibility(View.VISIBLE);
+                preferencePage = url;
+                enableLocalPreferences(url);
                 web.loadUrl(url);
                 Log.i(TAG, "WebView loading " + url);
             }
@@ -436,7 +480,11 @@ public class MainActivity extends Activity {
                     || !new File(dir, "public/index.html").isFile();
             Log.i(TAG, "copy: apkChanged=" + apkChanged + " needCode=" + needCode + " needArt=" + needArt);
 
-            String[] parts = { "server", "shared", "data", "docs", "mobile", "node_modules" };
+            // The 0.3.x server imports runtime parsers from tools/assets. Keep
+            // tools with the code tree so APK updates extract it alongside
+            // server/plugins instead of leaving a build-valid but unusable
+            // Node project on disk.
+            String[] parts = { "server", "shared", "data", "docs", "mobile", "node_modules", "tools" };
             if (needCode) {
                 for (String part : parts) deleteRecursively(new File(dir, part));
                 deleteRecursively(new File(dir, "package.json"));
@@ -507,7 +555,8 @@ public class MainActivity extends Activity {
         nodeArgs.add("--host");
         nodeArgs.add(getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(K_OPEN_LAN, false) ? "0.0.0.0" : "127.0.0.1");
         nodeArgs.add("--port");
-        nodeArgs.add("0");
+        int preferredPort = getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt("localPort", 3000);
+        nodeArgs.add(String.valueOf(preferredPort >= 3000 && preferredPort <= 3009 ? preferredPort : 3000));
 
         new Thread(new Runnable() {
             @Override
@@ -619,7 +668,11 @@ public class MainActivity extends Activity {
         try {
             JSONObject json = new JSONObject(new String(readAll(file), StandardCharsets.UTF_8));
             String url = json.optString("url", "");
-            if (!url.startsWith("http://127.0.0.1:") || json.optInt("health", 0) != 200 || !json.optBoolean("ws", false)) return null;
+            Uri parsed = Uri.parse(url);
+            int port = json.optInt("port", -1);
+            if (!"http".equals(parsed.getScheme()) || !"127.0.0.1".equals(parsed.getHost())
+                    || port < 3000 || port > 3009 || parsed.getPort() != port
+                    || json.optInt("health", 0) != 200 || !json.optBoolean("ws", false)) return null;
             return json;
         } catch (Exception e) {
             Log.w(TAG, "invalid existing handshake", e);
@@ -646,7 +699,10 @@ public class MainActivity extends Activity {
                     }
                     String url = json.optString("url", "");
                     if (url.length() > 0) {
+                        if (readValidHandshake(file) == null) throw new IOException("Invalid server handshake");
                         handshake = json;
+                        int boundPort = json.optInt("port", 3000);
+                        getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putInt("localPort", boundPort).apply();
                         String lan = lanList(json.optJSONArray("lan"));
                         Log.i(TAG, "server ready on " + url + (lan.length() == 0 ? "" : "  lan=" + lan) + "  node=" + json.optString("node", "?"));
                         setStatus("服务器已就绪，正在打开游戏…", lan.length() == 0 ? "正在加载客户端" : "局域网地址：" + lan);

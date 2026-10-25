@@ -1,30 +1,26 @@
 # Stronghold Protocol 独立 Android 打包器
 
-`Stronghold-Protocol-Packager` 是与上游游戏仓库分开的静态打包器。它读取外部的干净 `master` 工作树，把源码复制到临时 staging，再按 profile 生成 APK。打包器不会切换、拉取、写入或修改上游仓库。
+本仓库 `Fuhua-code/Stronghold-Protocol` 是独立静态工作台，与游戏 `master` 分开。工作台读取外部上游工作树，把源码、素材和 Android 运行时复制到 staging，再应用 `connect-runtime` overlay/feature packs 生成 APK；不会拉取、切换、写入或修改上游。
 
-默认命令生成 `connect` 联机 APK；`master` profile 生成只包含上游内容的纯 Android 包。APK 的 `versionName` 和资源清单来自 master，打包器版本记录在报告中独立维护。
+- 默认 profile `connect-runtime`：本地游玩、远程入口/记录、启动期存储/导出桥、可选 UI fallback。
+- `connect` legacy profile：旧 1.1.11 overlay，显式 fallback。
+- `master` profile：纯上游包，不含联机扩展。
+
+## 文档
+
+- [使用指南](usage.md)
+- [每日上游 Release 自动发布](automation.md)
+- [上游更新与兼容](upgrade-master.md)
+- [故障排查](troubleshooting.md)
+- [兼容矩阵](COMPAT-MATRIX.md)
+- [工作台细节](WORKBENCH.md)
 
 ## 快速开始
 
-1. 安装 Node.js 22+、JDK 17+、Android SDK（build-tools 35、platform android-35）、Git、GnuPG、`tar` 和 `xz`。
-2. 复制 `packager.config.example.json` 为 `packager.config.json`，填写 `masterDir`、工具链目录、资源目录和外置 keystore。
-3. 设置签名密码：
+1. Node 22+、JDK 17+、Android SDK（build-tools 35、android-35）、Git、curl、unzip、tar、xz。
+2. 复制 `packager.config.example.json` 为 `packager.config.json`，填写上游/依赖/素材/runtime/工具链/keystore。
+3. 复制 `workbench.config.example.json` 为 `workbench.config.json`，设置 `upstreamDir` 和本地策略。
+4. 设置 `PACKAGER_STORE_PASSWORD`、`PACKAGER_KEY_PASSWORD`。
+5. 运行 `packager.cmd doctor`，然后 `packager.cmd workbench`。
 
-   ```powershell
-   $env:PACKAGER_STORE_PASSWORD = '本机密钥库密码'
-   $env:PACKAGER_KEY_PASSWORD = '本机别名密码'
-   ```
-
-4. 在依赖工作树准备 `public/vendor`、`node_modules/ws`；如果本机还没有 runtime 缓存，准备一个包含 `runtime/`、`termux/`、`licenses/` 的外部目录，然后执行：
-
-   ```text
-   packager.cmd doctor
-   packager.cmd bootstrap --source <已准备的 runtime/termux/licenses 目录>
-   packager.cmd
-   ```
-
-成功后在 `outputs/<版本>/connect/` 得到 APK、SHA256、覆盖层报告、APK 检查报告和构建报告。
-
-## 安全边界
-
-打包器要求 master 分支且默认要求工作树干净；所有补丁和依赖处理都在 staging 中完成。密钥、密码、SDK、Node runtime、APK、日志和大型素材均被 `.gitignore` 排除，不应提交到打包器 Git。
+签名、密码、素材、runtime、APK、日志和 staging 均被 `.gitignore` 排除，不应提交。

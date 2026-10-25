@@ -9,8 +9,8 @@
 //
 //   1. Pick the game's `public/` directory: the first candidate that holds an `index.html` (Android passes the
 //      extracted assets directory; a desktop run of this file falls back to the directory next to it).
-//   2. server/index.js startServer() on an EPHEMERAL port by default (`--port 0`): Android reserves low ports and
-//      anything in use would fail the boot; loopback is the default and the Android UI can explicitly opt into LAN.
+//   2. server/index.js startServer() on port 3000 by default (bounded fallback through 3009): Android reserves low ports and
+//      an occupied port is retried deterministically; loopback is the default and the Android UI can explicitly opt into LAN.
 //   3. Wait until the server really answers (`/healthz` through ordinary HTTP, plus one WebSocket upgrade, which is
 //      what the game itself needs) before writing the handshake file, so the WebView is never pointed at a server
 //      that cannot serve yet.
@@ -28,6 +28,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { startServer, lanUrls } from '../../server/index.js';
 import { APP_VERSION, PROTOCOL_VERSION } from '../../shared/constants.js';
+import { startOnAvailablePort } from './ports.js';
 
 /** This file's directory (…/nodejs-project/mobile/node on Android, …/mobile/node in the repository). */
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -37,7 +38,7 @@ const say = (...a) => { console.log('[mobile]', ...a); };
 
 /** Parse `--key value` / `--key=value` (unknown options are ignored, the last occurrence wins). */
 function parseArgs(argv) {
-  const o = { public: null, data: null, handshake: null, host: process.env.HOST || '127.0.0.1', port: process.env.PORT ?? '0' };
+  const o = { public: null, data: null, handshake: null, host: process.env.HOST || '127.0.0.1', port: process.env.PORT ?? '3000' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const eq = a.indexOf('=');
@@ -51,7 +52,8 @@ function parseArgs(argv) {
     else if (key === '--port' || key === '-p') o.port = val();
   }
   const n = Number(o.port);
-  o.port = Number.isInteger(n) && n >= 0 && n <= 65535 ? n : 0;
+  if (!Number.isInteger(n) || n < 0 || n > 65535) throw new Error('Invalid local port');
+  o.port = n;
   return o;
 }
 
@@ -144,7 +146,7 @@ function wsUpgradeCheck(port, timeoutMs = 5000) {
     });
     // On success the socket is handed over to the 101 response; there is nothing left to destroy.
     const done = (ok) => { if (settled) return; settled = true; resolve(ok); };
-    req.on('upgrade', (res) => done(res.statusCode === 101));
+    req.on('upgrade', (res, socket) => { socket.destroy(); done(res.statusCode === 101); });
     req.on('response', (res) => done(res.statusCode === 101));
     req.on('timeout', () => { try { req.destroy(); } catch { /* gone */ } done(false); });
     req.on('error', () => done(false));
@@ -177,8 +179,19 @@ async function main() {
   say(`public=${publicDir}`);
   say(`data=${dataDir}${isDataDir(dataDir) ? '' : ' (not found: running without generated game data)'}`);
 
-  // The APK keeps serving its local page and assets; only the game WebSocket may be bridged to a compatible remote.
-  const srv = await startServer({ port: o.port, host: o.host, publicDir, dataDir, quiet: true, wsProxy: true });
+  // The runtime profile ships an extension boot script in public/sp-extension and runs the
+  // wrapper (public listener + untouched upstream on an internal port). The legacy overlay
+  // profile has no extension and keeps the historical direct startServer path.
+  const wrapped = fs.existsSync(path.join(publicDir, 'sp-extension', 'boot.js'));
+  let srv;
+  if (wrapped) {
+    const { startWrapper } = await import('./wrapper.js');
+    srv = await startWrapper({ publicDir, dataDir, host: o.host, port: o.port });
+    say(`wrapper mode: public ${o.host}:${srv.port}, upstream 127.0.0.1:${srv.upstreamPort}`);
+  } else {
+    // The APK keeps serving its local page and assets; only the game WebSocket may be bridged to a compatible remote.
+    srv = await startOnAvailablePort(startServer, { port: o.port, host: o.host, publicDir, dataDir, quiet: true, wsProxy: true });
+  }
 
   // Ready means it answers, not just that it listens.
   const health = await httpHealthz(srv.port);

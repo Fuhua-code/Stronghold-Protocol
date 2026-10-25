@@ -1,10 +1,10 @@
 {
   "id": "connect",
-  "version": "1.1.3",
+  "version": "1.1.11",
   "sourceVersion": {
     "min": "0.2.2",
     "maxMajor": 0,
-    "maxMinor": 2
+    "maxMinor": 3
   },
   "patches": [],
   "files": [
@@ -21,12 +21,24 @@
       "destination": "server/http/remote.js"
     },
     {
+      "source": "files/server/http/hostGuard.js",
+      "destination": "server/http/hostGuard.js"
+    },
+    {
       "source": "files/public/js/ui/remote-entry.js",
       "destination": "public/js/ui/remote-entry.js"
     },
     {
       "source": "files/public/js/ui/remote-guide.js",
       "destination": "public/js/ui/remote-guide.js"
+    },
+    {
+      "source": "files/public/js/ui/remote-settings.js",
+      "destination": "public/js/ui/remote-settings.js"
+    },
+    {
+      "source": "files/public/js/ui/remote-records.js",
+      "destination": "public/js/ui/remote-records.js"
     },
     {
       "source": "files/public/css/connect.css",
@@ -39,18 +51,186 @@
     {
       "source": "files/public/js/remote-session.js",
       "destination": "public/js/remote-session.js"
+    },
+    {
+      "source": "files/public/js/render/board-runtime.js",
+      "destination": "public/js/render/board-runtime.js"
+    },
+    {
+      "path": "public/js/render/boardArt.js",
+      "find": "let cached = null;",
+      "replace": "import { retryFetch, retryImage, normalizeAssetUrl, recordBoardFailure } from './board-runtime.js';\n\nlet cached = null;"
+    },
+    {
+      "path": "public/js/render/boardArt.js",
+      "find": "      const res = await fetch(`${dir}/tiles.json`, { cache: 'no-cache' });\n      tiles = res.ok ? await res.json() : null;\n    } catch { tiles = null; }",
+      "replace": "      tiles = await retryFetch(`${dir}/tiles.json`, { json: true });\n    } catch (err) { recordBoardFailure(`${dir}/tiles.json`, err?.message); tiles = null; }"
+    },
+    {
+      "path": "public/js/render/boardArt.js",
+      "find": "      const img = await assets.image(url).catch(() => null);\n      if (img && img.width > 0) images[k] = img;",
+      "replace": "      const img = await retryImage(assets, normalizeAssetUrl(url) || url);\n      if (img) images[k] = img;"
+    },
+    {
+      "path": "public/js/render/boardArt.js",
+      "find": "    if (!images.D) return null;\n    return { key: `${atlasUrl}#${tiles.version || 0}`, tiles, images };\n  })().catch(() => null);",
+      "replace": "    if (!images.D) { recordBoardFailure(atlasUrl, 'diffuse atlas unavailable'); return null; }\n    return { key: `${atlasUrl}#${tiles.version || 0}`, tiles, images };\n  })().catch((err) => { recordBoardFailure(null, err?.message); return null; });\n  cached = cached.then((value) => { if (!value) cached = null; return value; });"
+    },
+    {
+      "path": "public/js/render/board3d/load.js",
+      "find": "import { parseObj } from './obj.js';",
+      "replace": "import { parseObj } from './obj.js';\nimport { retryFetch, retryImage, normalizeAssetUrl, recordBoardFailure, setBoardMode } from '../board-runtime.js';"
+    },
+    {
+      "path": "public/js/render/board3d/load.js",
+      "find": "export function webgl2Available(allowSlow = false) {\n  try {\n    if (typeof document === 'undefined') return false;\n    const c = document.createElement('canvas');\n    const gl = c.getContext('webgl2', allowSlow ? {} : { failIfMajorPerformanceCaveat: true });",
+      "replace": "export function webgl2Available(allowSlow = false) {\n  try {\n    if (typeof document === 'undefined') return false;\n    const mobile = /Android/i.test(globalThis.navigator?.userAgent || '') || !!globalThis.AndroidBridge || !!globalThis.__SP_MOBILE__;\n    const permissive = !!allowSlow || mobile;\n    const c = document.createElement('canvas');\n    const gl = c.getContext('webgl2', permissive ? {} : { failIfMajorPerformanceCaveat: true });\n    setBoardMode(gl ? '3d-capable' : '2d', { webgl2: !!gl, allowSlow: permissive, slowGpu: mobile && !!gl });"
+    },
+    {
+      "path": "public/js/render/board3d/load.js",
+      "find": "async function fetchText(url) {\n  try { const r = await fetch(url, { cache: 'no-cache' }); return r.ok ? await r.text() : null; } catch { return null; }\n}\nasync function fetchJson(url) {\n  try { const r = await fetch(url, { cache: 'no-cache' }); return r.ok ? await r.json() : null; } catch { return null; }\n}",
+      "replace": "async function fetchText(url) {\n  try { return await retryFetch(url); } catch (err) { recordBoardFailure(url, err?.message); return null; }\n}\nasync function fetchJson(url) {\n  try { return await retryFetch(url, { json: true }); } catch (err) { recordBoardFailure(url, err?.message); return null; }\n}"
+    },
+    {
+      "path": "public/js/render/board3d/load.js",
+      "find": "      const img = await assets.image(u).catch(() => null);\n      if (img && (img.width || img.naturalWidth) > 0) images[k] = img;",
+      "replace": "      const img = await retryImage(assets, normalizeAssetUrl(u) || u);\n      if (img) images[k] = img;",
+      "alternatives": [
+        {
+          "find": "      const img = await assets.image(u, { retry: true }).catch(() => null);\n      if (img && (img.width || img.naturalWidth) > 0) images[k] = img;",
+          "replace": "      const img = await retryImage(assets, normalizeAssetUrl(u) || u);\n      if (img) images[k] = img;"
+        }
+      ]
+    },
+    {
+      "path": "public/js/render/board3d/load.js",
+      "find": "  })().catch((err) => { console.warn('[board3d] art load failed', err); return null; });\n  return cached;",
+      "replace": "  })().catch((err) => { recordBoardFailure(null, err?.message); console.warn('[board3d] art load failed', err); return null; });\n  cached = cached.then((value) => { if (!value) cached = null; return value; });\n  return cached;",
+      "alternatives": [
+        {
+          "find": "  })().catch((err) => { console.warn('[board3d] art load failed', err); return null; }).then((pack) => {\n    // A timeout / failed atlas is not proof the host lacks 3D art. A later mount or visibility change may retry.\n    // An older attempt finishing after reset must not discard a newer cached request.\n    if (!pack && cached === pending) cached = null;\n    return pack;\n  });\n  cached = pending;\n  return cached;",
+          "replace": "  })().catch((err) => { recordBoardFailure(null, err?.message); console.warn('[board3d] art load failed', err); return null; }).then((pack) => {\n    // A timeout / failed atlas is not proof the host lacks 3D art. A later mount or visibility change may retry.\n    // An older attempt finishing after reset must not discard a newer cached request.\n    if (!pack && cached === pending) cached = null;\n    return pack;\n  });\n  cached = pending;\n  return cached;"
+        },
+        {
+          "find": "  })().catch((err) => { console.warn('[board3d] art load failed', err); return null; }).then((pack) => {\n    // A timeout / failed atlas is not proof the host lacks 3D art. A later mount or visibility change may retry.\n    // An older attempt finishing after reset must not discard a newer cached request.\n    if (!pack && cached === pending) cached = null;\n    return pack;\n  });\n  cached = pending;\n  return pending;",
+          "replace": "  })().catch((err) => { recordBoardFailure(null, err?.message); console.warn('[board3d] art load failed', err); return null; }).then((pack) => {\n    // A timeout / failed atlas is not proof the host lacks 3D art. A later mount or visibility change may retry.\n    // An older attempt finishing after reset must not discard a newer cached request.\n    if (!pack && cached === pending) cached = null;\n    return pack;\n  });\n  cached = pending;\n  return pending;"
+        }
+      ]
     }
   ],
   "anchors": [
     {
-      "path": "server/http/routes.js",
-      "find": "import { setSecurityHeaders, sendError, sendJson, splitUrl } from './common.js';",
-      "replace": "import { setSecurityHeaders, sendError, sendJson, splitUrl } from './common.js';\nimport { createRemoteRouter } from './remote.js';"
+      "path": "public/js/ui/gameComponents.js",
+      "find": "export function Img({ src, class: cls, alt = '', fallback = null, style }) {\n  const [bad, setBad] = useState(null);\n  if (!src || bad === src) return fallback;\n  return html`<img class=${cls} src=${src} alt=${alt} draggable=${false} loading=\"lazy\" style=${style} onError=${() => setBad(src)} />`;\n}",
+      "replace": "export function Img({ src, class: cls, alt = '', fallback = null, style, loading = 'lazy', fetchpriority, decoding }) {\n  const [bad, setBad] = useState(null);\n  if (!src || bad === src) return fallback;\n  return html`<img class=${cls} src=${src} alt=${alt} draggable=${false} loading=${loading} fetchpriority=${fetchpriority} decoding=${decoding} style=${style} onError=${() => setBad(src)} />`;\n}"
+    },
+    {
+      "path": "public/js/ui/shopBar.js",
+      "find": "import { data } from '../data.js';",
+      "replace": "import { data } from '../data.js';\nimport { assets as assetStore } from '../assets.js';"
+    },
+    {
+      "path": "public/js/ui/shopBar.js",
+      "find": "    <${Img} src=${chessPortraitUrl(m, c)} class=\"scard__art\" />",
+      "replace": "    <${Img} src=${chessPortraitUrl(m, c)} class=\"scard__art\" loading=\"eager\" fetchpriority=\"high\" decoding=\"async\" />"
+    },
+    {
+      "path": "public/js/ui/shopBar.js",
+      "find": "  const itemSlots = slots.map((s, i) => ({ s, i })).filter(({ s }) => s && s.kind === 'item');",
+      "replace": "  const itemSlots = slots.map((s, i) => ({ s, i })).filter(({ s }) => s && s.kind === 'item');\n  const portraitPreloadKey = (reward?.slots || slots).map((s) => s?.kind === 'item' ? '' : s?.id || '').filter(Boolean).slice(0, 8).join('|');\n  useEffect(() => {\n    const m = data.get('assets');\n    const source = reward?.slots || slots;\n    const urls = source.map((s) => {\n      const c = s?.kind === 'item' ? null : data.lookup('chess', s?.id);\n      return c ? chessPortraitUrl(m, c) : null;\n    }).filter(Boolean).slice(0, 8);\n    assetStore.preload?.(urls);\n  }, [portraitPreloadKey]);"
+    },
+    {
+      "path": "public/js/render/app.js",
+      "find": "import { loadBoardArt } from './boardArt.js';",
+      "replace": "import { loadBoardArt, resetBoardArt } from './boardArt.js';\nimport { boardDiagnostics, recordBoardFailure, recordContextLoss, resetBoardRuntime, setBoardMode, showBoardNotice } from './board-runtime.js';"
+    },
+    {
+      "path": "public/js/render/app.js",
+      "find": "import { loadThree, loadBoardPack, webgl2Available, boardArtListed } from './board3d/load.js';",
+      "replace": "import { loadThree, loadBoardPack, resetBoardPack, webgl2Available, boardArtListed } from './board3d/load.js';",
+      "alternatives": [
+        {
+          "find": "import { loadThree, loadBoardPack, loadScenePack, webgl2Available, boardArtListed } from './board3d/load.js';",
+          "replace": "import { loadThree, loadBoardPack, loadScenePack, resetBoardPack, webgl2Available, boardArtListed } from './board3d/load.js';"
+        }
+      ]
+    },
+    {
+      "path": "public/js/render/app.js",
+      "find": "  const want3d = boardPref !== '2d' && webgl2Available(boardPref === '3d');",
+      "replace": "  const want3d = boardPref !== '2d' && webgl2Available(boardPref === '3d');\n  setBoardMode(want3d ? '3d-loading' : '2d', { webgl2: want3d });"
+    },
+    {
+      "path": "public/js/render/app.js",
+      "find": "  const artPromise = loadBoardArt(assets).then((art) => {\n    if (art && !destroyed) { tiles.setArt(art); tiles.project(cam, true); }\n    return art;\n  }, () => null);",
+      "replace": "  const artPromise = loadBoardArt(assets).then((art) => {\n    if (art && !destroyed) { tiles.setArt(art); tiles.project(cam, true); }\n    if (!art) recordBoardFailure(null, 'board art unavailable');\n    return art;\n  }, (err) => { recordBoardFailure(null, err?.message); return null; });"
+    },
+    {
+      "path": "public/js/render/app.js",
+      "find": "  function enable3d(THREE, pack) {",
+      "replace": "  function enable3d(THREE, pack) {\n    setBoardMode('3d-loading');"
+    },
+    {
+      "path": "public/js/render/app.js",
+      "find": "      board3dError = String(err?.message || err);\n      console.warn('[render] 3D board unavailable, using the 2D board:', err);",
+      "replace": "      board3dError = String(err?.message || err);\n      recordBoardFailure(null, board3dError);\n      setBoardMode('2d', { reason: board3dError });\n      console.warn('[render] 3D board unavailable, using the 2D board:', err);"
+    },
+    {
+      "path": "public/js/render/app.js",
+      "find": "  function onBoard3dLost() {\n    console.warn('[render] WebGL context of the 3D board lost: 2D board until it can be rebuilt');",
+      "replace": "  function onBoard3dLost() {\n    recordContextLoss();\n    setBoardMode('2d', { reason: 'webgl-context-lost' });\n    console.warn('[render] WebGL context of the 3D board lost: 2D board until it can be rebuilt');"
+    },
+    {
+      "path": "public/js/render/app.js",
+      "find": "  if (want3d) {\n    const ready = Promise.all([threePromise, packPromise]).then(([THREE, pack]) => (THREE && pack ? enable3d(THREE, pack) : false), () => false);\n    await withTimeout(ready, 6000);\n  }",
+      "replace": "  if (want3d) {\n    const ready = Promise.all([threePromise, packPromise]).then(([THREE, pack]) => {\n      if (!THREE || !pack) { recordBoardFailure(null, !pack ? 'board pack unavailable' : 'three.js unavailable'); return false; }\n      return enable3d(THREE, pack);\n    }, (err) => { recordBoardFailure(null, err?.message); return false; });\n    await withTimeout(ready, 6000);\n  }",
+      "alternatives": [
+        {
+          "find": "  // Attach the board only after synchronous setup completes; enable3d also guards late arrivals.\n  const boardReady = Promise.all([threePromise, packPromise]).then(([THREE, pack]) => (THREE && pack ? enable3d(THREE, pack) : false), () => false);",
+          "replace": "  // Attach the board only after synchronous setup completes; enable3d also guards late arrivals.\n  const boardReady = Promise.all([threePromise, packPromise]).then(([THREE, pack]) => {\n    if (!THREE || !pack) { recordBoardFailure(null, !pack ? 'board pack unavailable' : 'three.js unavailable'); return false; }\n    return enable3d(THREE, pack);\n  }, (err) => { recordBoardFailure(null, err?.message); return false; });"
+        }
+      ]
+    },
+    {
+      "path": "public/js/render/app.js",
+      "find": "    destroy() {",
+      "replace": "    async reloadBoardAssets() {\n      if (destroyed) return false;\n      resetBoardRuntime(); resetBoardArt(); resetBoardPack(); recover.off = false; recover.tries = 0;\n      const art = await loadBoardArt(assets);\n      if (art) { tiles.setArt(art); tiles.project(cam, true); }\n      const [THREE, pack] = await Promise.all([loadThree(), loadBoardPack(assets)]);\n      const ok = !!(THREE && pack && enable3d(THREE, pack));\n      if (ok) setBoardMode('3d');\n      else { setBoardMode('2d', { reason: boardDiagnostics().reason || 'board-retry-failed' }); showBoardNotice(host, { mode: '2d', reason: boardDiagnostics().reason, onRetry: () => globalThis.__SP_RETRY_BOARD__?.() }); }\n      return ok;\n    },\n    destroy() {"
+    },
+    {
+      "path": "public/js/render/app.js",
+      "find": "        board3d: board3d ? { on: true, ...board3d.stats(), losses: recover.count } : { on: false, error: board3dError, recovering: !!recover.timer, losses: recover.count },",
+      "replace": "        board3d: board3d ? { on: true, ...board3d.stats(), losses: recover.count } : { on: false, error: board3dError, recovering: !!recover.timer, losses: recover.count },\n        diagnostics: boardDiagnostics(),"
+    },
+    {
+      "path": "public/js/render/app.js",
+      "find": "  return view;\n}",
+      "replace": "  globalThis.__SP_RETRY_BOARD__ = () => view.reloadBoardAssets();\n  if (!board3d) showBoardNotice(host, { mode: '2d', reason: boardDiagnostics().reason || (want3d ? '3D initialization failed' : 'WebGL2 unavailable'), onRetry: () => globalThis.__SP_RETRY_BOARD__?.() });\n  return view;\n}",
+      "alternatives": [
+        {
+          "find": "  return view;\n  } catch (err) {",
+          "replace": "  globalThis.__SP_RETRY_BOARD__ = () => view.reloadBoardAssets();\n  if (!board3d) showBoardNotice(host, { mode: '2d', reason: boardDiagnostics().reason || (want3d ? '3D initialization failed' : 'WebGL2 unavailable'), onRetry: () => globalThis.__SP_RETRY_BOARD__?.() });\n  return view;\n  } catch (err) {"
+        }
+      ]
     },
     {
       "path": "server/http/routes.js",
-      "find": "export function healthReport({ startedAt, network, registry, lobby }) {",
-      "replace": "export function healthReport({ startedAt, network, registry, lobby, fingerprints = {} }) {"
+      "find": "import { setSecurityHeaders, sendError, sendJson, splitUrl } from './common.js';",
+      "replace": "import { setSecurityHeaders, sendError, sendJson, splitUrl } from './common.js';\nimport { createRemoteRouter } from './remote.js';\nimport { isLocalHostHeader } from './hostGuard.js';"
+    },
+    {
+      "path": "server/http/routes.js",
+      "find": "export function healthReport({ startedAt, network, registry, lobby, content = null, traffic, assetIndex, views, trusted }, withTraffic = false) {",
+      "replace": "export function healthReport({ startedAt, network, registry, lobby, content = null, traffic, assetIndex, views, trusted, fingerprints = {} }, withTraffic = false) {",
+      "alternatives": [
+        {
+          "find": "export function healthReport({ startedAt, network, registry, lobby, traffic, assetIndex, views }, withTraffic = false) {",
+          "replace": "export function healthReport({ startedAt, network, registry, lobby, traffic, assetIndex, views, fingerprints = {} }, withTraffic = false) {"
+        },
+        {
+          "find": "export function healthReport({ startedAt, network, registry, lobby }) {",
+          "replace": "export function healthReport({ startedAt, network, registry, lobby, fingerprints = {} }) {"
+        }
+      ]
     },
     {
       "path": "server/http/routes.js",
@@ -59,13 +239,28 @@
     },
     {
       "path": "server/http/routes.js",
-      "find": "export function createRequestHandler({ serveStatic, health, log }) {",
-      "replace": "export function createRequestHandler({ serveStatic, health, remote, log }) {\n  const handleRemote = createRemoteRouter(remote || {});"
+      "find": "export function createRequestHandler({ serveStatic, health, log, trustProxy = 'auto', studio = null, csp = null, trustedRuntime = null }) {",
+      "replace": "export function createRequestHandler({ serveStatic, health, remote, log, trustProxy = 'auto', studio = null, csp = null, trustedRuntime = null }) {\n  const handleRemote = createRemoteRouter(remote || {});",
+      "alternatives": [
+        {
+          "find": "export function createRequestHandler({ serveStatic, health, log, trustProxy = 'auto' }) {",
+          "replace": "export function createRequestHandler({ serveStatic, health, remote, log, trustProxy = 'auto' }) {\n  const handleRemote = createRemoteRouter(remote || {});"
+        },
+        {
+          "find": "export function createRequestHandler({ serveStatic, health, log, trustProxy = 'auto' }) {",
+          "replace": "export function createRequestHandler({ serveStatic, health, remote, log, trustProxy = 'auto' }) {\n  const handleRemote = createRemoteRouter(remote || {});"
+        }
+      ]
     },
     {
       "path": "server/http/routes.js",
-      "find": "    if (parts.rawPath === '/healthz') {",
-      "replace": "    if (await handleRemote(req, res, parts)) return;\n    if (parts.rawPath === '/healthz') {"
+      "find": "    if (trustedRuntime && parts.rawPath.startsWith('/x/') && await trustedRuntime.route(req,res,parts.rawPath)) return;",
+      "replace": "    if (trustedRuntime && parts.rawPath.startsWith('/x/') && await trustedRuntime.route(req,res,parts.rawPath)) return;\n    if (await handleRemote(req, res, parts)) return;"
+    },
+    {
+      "path": "server/http/routes.js",
+      "find": "    const url = req.url || '/';",
+      "replace": "    if (!isLocalHostHeader(req)) { sendError(req, res, 403, 'Forbidden'); return; }\n    const url = req.url || '/';"
     },
     {
       "path": "server/index.js",
@@ -74,13 +269,29 @@
     },
     {
       "path": "server/index.js",
-      "find": "  const server = http.createServer(createRequestHandler({ serveStatic, health: { startedAt, network, registry, lobby }, log }));",
-      "replace": "  const proxy = createProxyState();\n  const fingerprints = remoteHealth();\n  const server = http.createServer();\n  server.on('request', createRequestHandler({ serveStatic, health: { startedAt, network, registry, lobby, fingerprints },\n    remote: { host, wsProxy: !!opts.wsProxy, fingerprints, proxy, getPort: () => server.address()?.port || port }, log }));"
+      "find": "  const server = http.createServer(createRequestHandler({ serveStatic, csp: process.env.SP_CSP === 'off' ? null : siteCsp(publicDir), health: { startedAt, network, registry, lobby, content, traffic, assetIndex, views, trusted:trustedRuntime?.health }, log, trustProxy: network.opts.trustProxy, studio, trustedRuntime }));",
+      "replace": "  const proxy = createProxyState();\n  const fingerprints = remoteHealth();\n  const server = http.createServer();\n  server.on('request', createRequestHandler({ serveStatic, csp: process.env.SP_CSP === 'off' ? null : siteCsp(publicDir), health: { startedAt, network, registry, lobby, content, traffic, assetIndex, views, trusted:trustedRuntime?.health, fingerprints }, remote: { host, wsProxy: !!opts.wsProxy, fingerprints, proxy, getPort: () => server.address()?.port || port }, log, trustProxy: network.opts.trustProxy, studio, trustedRuntime }));",
+      "alternatives": [
+        {
+          "find": "  const server = http.createServer(createRequestHandler({ serveStatic, health: { startedAt, network, registry, lobby, traffic, assetIndex, views }, log, trustProxy: network.opts.trustProxy }));",
+          "replace": "  const proxy = createProxyState();\n  const fingerprints = remoteHealth();\n  const server = http.createServer();\n  server.on('request', createRequestHandler({ serveStatic, health: { startedAt, network, registry, lobby, traffic, assetIndex, views, fingerprints },\n    remote: { host, wsProxy: !!opts.wsProxy, fingerprints, proxy, getPort: () => server.address()?.port || port }, log, trustProxy: network.opts.trustProxy }));"
+        },
+        {
+          "find": "  const server = http.createServer(createRequestHandler({ serveStatic, health: { startedAt, network, registry, lobby }, log }));",
+          "replace": "  const proxy = createProxyState();\n  const fingerprints = remoteHealth();\n  const server = http.createServer();\n  server.on('request', createRequestHandler({ serveStatic, health: { startedAt, network, registry, lobby, fingerprints }, remote: { host, wsProxy: !!opts.wsProxy, fingerprints, proxy, getPort: () => server.address()?.port || port }, log }));"
+        }
+      ]
     },
     {
       "path": "server/index.js",
-      "find": "  const wss = attachWebSocket(server, { network, log });",
-      "replace": "  const wss = attachWebSocket(server, { network, log, wsProxy: !!opts.wsProxy, proxy });"
+      "find": "  const wss = attachWebSocket(server, { network, log, traffic });",
+      "replace": "  const wss = attachWebSocket(server, { network, log, traffic, wsProxy: !!opts.wsProxy, proxy });",
+      "alternatives": [
+        {
+          "find": "  const wss = attachWebSocket(server, { network, log });",
+          "replace": "  const wss = attachWebSocket(server, { network, log, wsProxy: !!opts.wsProxy, proxy });"
+        }
+      ]
     },
     {
       "path": "server/index.js",
@@ -94,8 +305,8 @@
     },
     {
       "path": "server/http/websocket.js",
-      "find": "export function attachWebSocket(server, { network, log }) {",
-      "replace": "export function attachWebSocket(server, { network, log, wsProxy = false, proxy = null }) {\n  const remoteProxy = createWsProxy({ proxy, enabled: wsProxy });"
+      "find": "export function attachWebSocket(server, { network, log, traffic = null }) {",
+      "replace": "export function attachWebSocket(server, { network, log, traffic = null, wsProxy = false, proxy = null }) {\n  const remoteProxy = createWsProxy({ proxy, enabled: wsProxy });"
     },
     {
       "path": "server/http/websocket.js",
@@ -105,12 +316,22 @@
     {
       "path": "server/http/websocket.js",
       "find": "    if (!parts || parts.rawPath !== '/ws') { reject(404, 'Not Found'); return; }",
-      "replace": "    if (!parts || parts.rawPath !== '/ws') { reject(404, 'Not Found'); return; }\n    if (remoteProxy.upgrade(req, socket, head)) return;"
+      "replace": "    if (!parts || parts.rawPath !== '/ws') { reject(404, 'Not Found'); return; }\n    if (req.headers.origin) { try { if (new URL(req.headers.origin).host !== req.headers.host) { reject(403, 'Forbidden'); return; } } catch { reject(403, 'Forbidden'); return; } }\n    if (remoteProxy.upgrade(req, socket, head)) return;"
     },
     {
       "path": "public/index.html",
-      "find": "</head>",
-      "replace": "  <link rel=\"stylesheet\" href=\"/css/connect.css\" />\n</head>"
+      "find": "  <link rel=\"stylesheet\" href=\"/css/devices.css\" />",
+      "replace": "  <link rel=\"stylesheet\" href=\"/css/connect.css\" />\n  <link rel=\"stylesheet\" href=\"/css/devices.css\" />"
+    },
+    {
+      "path": "public/js/ui/settings.js",
+      "find": "import { cosmetics } from '../cosmetics.js';",
+      "replace": "import { cosmetics } from '../cosmetics.js';\nimport { RemoteSettingsSection } from './remote-settings.js';"
+    },
+    {
+      "path": "public/js/ui/settings.js",
+      "find": "      <${StorageSection} />",
+      "replace": "      <${StorageSection} />\n      <${RemoteSettingsSection} />"
     },
     {
       "path": "public/js/screens/title.js",
@@ -186,6 +407,132 @@
       "path": "public/js/ui/guide.js",
       "find": "<${TipsFallback} />",
       "replace": "${remote ? html`<${RemoteGuide} />` : html`<${TipsFallback} />`}"
+    },
+    {
+      "path": "public/js/assets.js",
+      "find": "  const images = new Map(); // url → { promise, value }",
+      "replace": "  const images = new Map(); // url → { promise, value }\n  const imageRetryDelays = Array.isArray(opts.imageRetryDelays) ? opts.imageRetryDelays : [120, 400, 1200];"
+    },
+    {
+      "path": "public/js/assets.js",
+      "find": "  /** Image element (cached; failures resolve to null). */\n  function image(u) {\n    const s = str(u);\n    if (!s) return Promise.resolve(null);\n    let e = images.get(s);\n    if (!e) {\n      e = { value: null, done: false, promise: null };\n      e.promise = Promise.resolve().then(() => loadImage(s)).then(\n        (img) => { e.value = img; e.done = true; return img; },\n        () => { e.done = true; return null; },\n      );\n      images.set(s, e);\n    }\n    return e.promise;\n  }",
+      "alternatives": [
+        {
+          "find": "  /** Image element (cached; failures resolve to null — a cosmetic plugin's image that failed falls back: `failed`). */\n  function image(u, { retry = false } = {}) {\n    const s = str(u);\n    if (!s) return Promise.resolve(null);\n    let e = images.get(s);\n    if (retry && e?.done && !e.value) { images.delete(s); e = null; }\n    if (!e) {\n      e = { value: null, done: false, promise: null };\n      e.promise = Promise.resolve().then(() => loadImage(s)).then(\n        (img) => { e.value = img; e.done = true; if (!img) failed(s); return img; },\n        () => { e.done = true; failed(s); return null; },\n      );\n      images.set(s, e);\n    }\n    return e.promise;\n  }",
+          "replace": "  /** Image element cache with bounded retries; a failed image is never a permanent null entry. */\n  function image(u, { retry = true } = {}) {\n    const s = str(u);\n    if (!s) return Promise.resolve(null);\n    let e = images.get(s);\n    if (retry && e?.done && !e.value) { images.delete(s); e = null; }\n    if (!e) {\n      e = { value: null, done: false, promise: null };\n      const delays = retry ? retryDelays : [];\n      e.promise = (async () => {\n        for (let attempt = 0; attempt <= delays.length; attempt++) {\n          try {\n            const img = await loadImage(s);\n            if (img && (img.width || img.naturalWidth) > 0) { e.value = img; e.done = true; return img; }\n          } catch { /* retry below */ }\n          if (attempt < delays.length) await wait(delays[attempt]);\n        }\n        e.done = true;\n        if (images.get(s) === e) images.delete(s);\n        failed(s);\n        return null;\n      })();\n      images.set(s, e);\n    }\n    return e.promise;\n  }"
+        }
+      ],
+      "replace": "  /** Image element cache with bounded retries; a failed image is never a permanent null entry. */\n  function image(u, options = {}) {\n    const s = str(u);\n    if (!s) return Promise.resolve(null);\n    const retry = options.retry !== false;\n    let e = images.get(s);\n    if (e && e.done && !e.value && retry) { images.delete(s); e = null; }\n    if (!e) {\n      e = { value: null, done: false, promise: null };\n      const delays = retry ? imageRetryDelays : [];\n      e.promise = (async () => {\n        for (let attempt = 0; attempt <= delays.length; attempt++) {\n          try {\n            const img = await loadImage(s);\n            if (img && (img.width || img.naturalWidth) > 0) { e.value = img; e.done = true; return img; }\n          } catch { /* retry below */ }\n          if (attempt < delays.length) await wait(delays[attempt]);\n        }\n        e.done = true;\n        if (images.get(s) === e) images.delete(s);\n        return null;\n      })();\n      images.set(s, e);\n    }\n    return e.promise;\n  }"
+    },
+    {
+      "path": "public/js/assets.js",
+      "find": "  /** Optional local-client art manifest (null when absent: every consumer falls back). Fetched once (or seeded). */\n  function local() {\n    if (!localPromise) {\n      localPromise = (async () => {\n        try {\n          const res = await doFetch(localUrl, { cache: 'no-cache' });\n          if (!res || !res.ok) return localManifest;\n          const json = await res.json();\n          if (!localManifest && isObj(json) && isObj(json.groups)) { localManifest = json; notify('local'); }\n        } catch { /* optional art: absent */ }\n        return localManifest;\n      })();\n    }\n    return localPromise;\n  }",
+      "replace": "  /** Optional local-client art manifest. Transient failures clear the promise so a later board load can retry. */\n  function local() {\n    if (localManifest) return Promise.resolve(localManifest);\n    if (!localPromise) {\n      const attempt = (async () => {\n        try {\n          const res = await doFetch(localUrl, { cache: 'no-cache' });\n          if (!res || !res.ok) throw new Error(`HTTP ${res ? res.status : '???'}`);\n          const json = await res.json();\n          if (!isObj(json) || !isObj(json.groups)) throw new Error('invalid local asset manifest');\n          localManifest = json; notify('local');\n          return localManifest;\n        } catch (err) {\n          if (localPromise === attempt) localPromise = null;\n          return localManifest;\n        }\n      })();\n      localPromise = attempt;\n    }\n    return localPromise;\n  }"
+    },
+    {
+      "path": "public/js/screens/stats.js",
+      "find": "  trophyMedalOf, strategyBadgeIds, bondMemberChess, highestBondRecord,\n} from '../ui/stats.js';",
+      "replace": "  trophyMedalOf, strategyBadgeIds, bondMemberChess, highestBondRecord,\n} from '../ui/stats.js';\nimport { RemoteRecordsTab } from '../ui/remote-records.js';"
+    },
+    {
+      "path": "public/js/screens/stats.js",
+      "find": "export function openStats() {",
+      "replace": "export function openStats(tab = 'overview') {"
+    },
+    {
+      "path": "public/js/screens/stats.js",
+      "find": "  statsStore.set({ open: true, tab: 'overview' });",
+      "replace": "  statsStore.set({ open: true, tab: TABS.some((x) => x.id === tab) ? tab : 'overview' });"
+    },
+    {
+      "path": "public/js/screens/stats.js",
+      "find": "  { id: 'history', name: N_('对局记录'), micro: 'HISTORY' },\n];",
+      "replace": "  { id: 'history', name: N_('对局记录'), micro: 'HISTORY' },\n  { id: 'remote', name: N_('远程记录'), micro: 'REMOTE' },\n];"
+    },
+    {
+      "path": "public/js/screens/stats.js",
+      "find": "      <div class=\"st-top__right\">\n        <${Button} variant=\"ghost\" size=\"sm\" data-testid=\"stats-export\"",
+      "replace": "      <div class=\"st-top__right\">\n        <${Button} variant=\"ghost\" size=\"sm\" data-testid=\"stats-remote\" onClick=${() => statsStore.set({ tab: 'remote' })}>${t('远程记录')}<//>\n        <${Button} variant=\"ghost\" size=\"sm\" data-testid=\"stats-export\""
+    },
+    {
+      "path": "public/js/screens/stats.js",
+      "find": "                : tab === 'history' ? html`<${History} records=${stats.records} gd=${gd} onOpen=${setReplay} />`",
+      "replace": "                : tab === 'remote' ? html`<${RemoteRecordsTab} onOpen=${setReplay} onChanged=${() => setStats(loadStats())} />`\n                : tab === 'history' ? html`<${History} records=${stats.records} gd=${gd} onOpen=${setReplay} />`"
+    },
+    {
+      "path": "public/js/screens/stats.js",
+      "find": "      ${isModdedRecord(rec) ? html`<em class=\"st-chip is-modded\" title=${(rec.content.plugins || []).join(', ')}>${t('非官方')}</em>` : null}</td>",
+      "replace": "      ${isModdedRecord(rec) ? html`<em class=\"st-chip is-modded\" title=${(rec.content.plugins || []).join(', ')}>${t('非官方')}</em>` : null}\n      ${rec.src ? html`<em class=\"st-chip is-modded\" title=${rec.src.host || rec.src.origin}>${t('远程')}</em>` : null}</td>"
+    },
+    {
+      "path": "public/js/screens/stats.js",
+      "find": "  return html`<${ResultView} res=${res} pub=${null} myId=${rec.selfId} backLabel=${t('返回统计')} onBack=${onBack} quiet=${true}",
+      "replace": "  return html`<${ResultView} res=${res} pub=${null} myId=${rec.selfId} backLabel=${rec.src ? t('返回统计') + ' · ' + (rec.src.host || rec.src.origin) : t('返回统计')} onBack=${onBack} quiet=${true}"
+    },
+    {
+      "path": "public/js/ui/stats.js",
+      "find": "  if (r.compact === true) rec.compact = true;",
+      "replace": "  if (r.compact === true) rec.compact = true;\n  if (isObj(r.src) && str(r.src.origin, 128)) rec.src = { origin: str(r.src.origin, 128), host: str(r.src.host, 128),\n    app: str(r.src.app, 32), verification: str(r.src.verification, 32), collectedAt: num(r.src.collectedAt) };"
+    },
+    {
+      "path": "public/js/ui/stats.js",
+      "find": "  'difficulty', 'roomMode', 'durationMs', 'selfId', 'vs', 'content', 'test', 'testActions'];",
+      "replace": "  'difficulty', 'roomMode', 'durationMs', 'selfId', 'vs', 'content', 'test', 'testActions', 'src'];"
+    },
+    {
+      "path": "public/js/screens/stats.js",
+      "find": "          : empty ? html`<p class=\"st-empty\">${t('还没有记录 —— 完成一局对局后，这里会开始积累。')}</p>`",
+      "replace": "          : empty && tab !== 'remote' ? html`<p class=\"st-empty\">${t('还没有记录 —— 完成一局对局后，这里会开始积累。')}</p>`"
+    },
+    {
+      "path": "public/i18n/en.json",
+      "find": "  \"导出\": \"Export\",",
+      "replace": "  \"导出\": \"Export\",\n  \"远程记录\": \"Remote Records\",\n  \"远程\": \"Remote\",\n  \"导出失败\": \"Export failed\","
+    },
+    {
+      "path": "public/i18n/ja.json",
+      "find": "  \"导出\": \"エクスポート\",",
+      "replace": "  \"导出\": \"エクスポート\",\n  \"远程记录\": \"リモート記録\",\n  \"远程\": \"リモート\",\n  \"导出失败\": \"エクスポートに失敗しました\","
+    },
+    {
+      "path": "public/i18n/ko.json",
+      "find": "  \"导出\": \"내보내기\",",
+      "replace": "  \"导出\": \"내보내기\",\n  \"远程记录\": \"원격 기록\",\n  \"远程\": \"원격\",\n  \"导出失败\": \"내보내기 실패\","
+    },
+    {
+      "path": "public/i18n/zh-TW.json",
+      "find": "  \"导出\": \"匯出\",",
+      "replace": "  \"导出\": \"匯出\",\n  \"远程记录\": \"遠端記錄\",\n  \"远程\": \"遠端\",\n  \"导出失败\": \"匯出失敗\","
+    },
+    {
+      "path": "public/js/ui/stats.js",
+      "find": "/** Read the raw stored string (null when absent or unreadable). */\nfunction readRaw() {\n  try { return globalThis.localStorage?.getItem(FULL_KEY) ?? null; } catch { return null; }\n}",
+      "replace": "/** Read the raw stored string: the Android bridge store first, localStorage as the portable mirror. */\nfunction readRaw() {\n  const bridge = globalThis.SP_BRIDGE;\n  if (bridge && typeof bridge.readLocalStats === 'function') {\n    try {\n      const stored = bridge.readLocalStats();\n      if (stored != null) return stored;\n    } catch { /* fall back to localStorage */ }\n  }\n  try {\n    const legacy = globalThis.localStorage?.getItem(FULL_KEY) ?? null;\n    if (legacy != null && bridge && typeof bridge.writeLocalStats === 'function') {\n      try { bridge.writeLocalStats(legacy); } catch { /* seed best-effort */ }\n    }\n    return legacy;\n  } catch { return null; }\n}"
+    },
+    {
+      "path": "public/js/ui/stats.js",
+      "find": "  for (;;) {\n    try {\n      const ls = globalThis.localStorage;\n      if (!ls) return false; // no storage at all (disabled by the browser)\n      ls.setItem(FULL_KEY, JSON.stringify({ v: STATS_VERSION, records: recs }));\n      return true;\n    } catch { /* quota or storage disabled — fall through to shrinking */ }\n    if (recs.length <= 8) return false; // a small history that still does not fit is foreign quota pressure\n    recs = recs.slice(0, Math.max(8, Math.ceil(recs.length / 2)));\n  }",
+      "replace": "  for (;;) {\n    const json = JSON.stringify({ v: STATS_VERSION, records: recs });\n    const bridge = globalThis.SP_BRIDGE;\n    if (bridge && typeof bridge.writeLocalStats === 'function') {\n      try {\n        if (bridge.writeLocalStats(json)) {\n          try { globalThis.localStorage?.setItem(FULL_KEY, json); } catch { /* the device store stays authoritative */ }\n          return true;\n        }\n      } catch { /* fall back to localStorage */ }\n    }\n    try {\n      const ls = globalThis.localStorage;\n      if (!ls) return false; // no storage at all (disabled by the browser)\n      ls.setItem(FULL_KEY, json);\n      return true;\n    } catch { /* quota or storage disabled — fall through to shrinking */ }\n    if (recs.length <= 8) return false; // a small history that still does not fit is foreign quota pressure\n    recs = recs.slice(0, Math.max(8, Math.ceil(recs.length / 2)));\n  }"
+    },
+    {
+      "path": "public/js/ui/stats.js",
+      "find": "    try { globalThis.localStorage?.setItem(DAMAGED_KEY, raw); globalThis.localStorage?.removeItem(FULL_KEY); } catch { /* keep it in place */ }",
+      "replace": "    try { globalThis.localStorage?.setItem(DAMAGED_KEY, raw); globalThis.localStorage?.removeItem(FULL_KEY); } catch { /* keep it in place */ }\n    try { globalThis.SP_BRIDGE?.removeLocalStats?.(); } catch { /* keep it in place */ }"
+    },
+    {
+      "path": "public/js/screens/stats.js",
+      "find": "    if (!saveStats(emptyStats())) { try { globalThis.localStorage?.removeItem('sp.pref.stats'); } catch { /* ignore */ } }",
+      "replace": "    if (!saveStats(emptyStats())) {\n      try { globalThis.localStorage?.removeItem('sp.pref.stats'); } catch { /* ignore */ }\n      try { globalThis.SP_BRIDGE?.removeLocalStats?.(); } catch { /* ignore */ }\n    }"
+    },
+    {
+      "path": "public/js/screens/stats.js",
+      "find": "/** Save `text` as a download. Silent no-op when the browser refuses downloads. */\nfunction downloadText(filename, text) {\n  try {\n    const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));\n    const a = document.createElement('a');\n    a.href = url;\n    a.download = filename;\n    document.body.appendChild(a);\n    a.click();\n    a.remove();\n    setTimeout(() => URL.revokeObjectURL(url), 4000);\n  } catch { /* ignore */ }\n}",
+      "replace": "/** Save `text` as a download. On Android the native bridge writes it and reports the real path. */\nfunction downloadText(filename, text) {\n  const bridge = globalThis.SP_BRIDGE;\n  if (bridge && typeof bridge.exportStats === 'function') {\n    try {\n      const status = bridge.exportStats(filename, text);\n      if (status) return String(status);\n    } catch { /* fall through to the browser download */ }\n  }\n  try {\n    const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));\n    const a = document.createElement('a');\n    a.href = url;\n    a.download = filename;\n    document.body.appendChild(a);\n    a.click();\n    a.remove();\n    setTimeout(() => URL.revokeObjectURL(url), 4000);\n  } catch { /* ignore */ }\n  return null;\n}"
+    },
+    {
+      "path": "public/js/screens/stats.js",
+      "find": "  const doExport = () => {\n    try {\n      const payload = exportStats(stats);\n      downloadText(exportFilename(), JSON.stringify(payload));\n      toast(t('已导出 {n} 条对局记录', { n: payload.records.length }), 'success');\n    } catch (err) {\n      toastError(err);\n    }\n  };",
+      "replace": "  const doExport = () => {\n    try {\n      const payload = exportStats(stats);\n      const status = downloadText(exportFilename(), JSON.stringify(payload));\n      if (status === 'error') { toast(t('导出失败'), 'error'); return; }\n      if (status === 'picker') return; // the system save dialog and the native result dialog carry the feedback\n      toast(t('已导出 {n} 条对局记录', { n: payload.records.length }), 'success');\n    } catch (err) {\n      toastError(err);\n    }\n  };"
     }
   ],
   "requiredPaths": [
@@ -195,6 +542,7 @@
     "public/js/ui/guide.js",
     "shared/connect.js",
     "server/http/remote.js",
+    "server/http/hostGuard.js",
     "server/http/routes.js",
     "server/http/websocket.js",
     "server/index.js",
@@ -202,8 +550,11 @@
     "test/remote-overlay.test.mjs",
     "public/js/ui/remote-entry.js",
     "public/js/ui/remote-guide.js",
+    "public/js/ui/remote-settings.js",
+    "public/js/ui/remote-records.js",
     "public/css/connect.css",
-    "public/js/remote-session.js"
+    "public/js/remote-session.js",
+    "public/js/render/board-runtime.js"
   ],
   "requiredMarkers": [
     {
@@ -228,7 +579,7 @@
     },
     {
       "path": "public/js/ui/remote-entry.js",
-      "text": "answerCertificate"
+      "text": "alertDialog"
     },
     {
       "path": "public/js/ui/guide.js",
@@ -237,6 +588,30 @@
     {
       "path": "mobile/node/main.js",
       "text": "wsProxy"
+    },
+    {
+      "path": "public/js/screens/stats.js",
+      "text": "RemoteRecordsTab"
+    },
+    {
+      "path": "public/js/ui/stats.js",
+      "text": "rec.src"
+    },
+    {
+      "path": "server/http/remote.js",
+      "text": "/connect/records"
+    },
+    {
+      "path": "public/js/ui/stats.js",
+      "text": "readLocalStats"
+    },
+    {
+      "path": "public/js/screens/stats.js",
+      "text": "removeLocalStats"
+    },
+    {
+      "path": "server/http/remote.js",
+      "text": "recordsMirrorFile"
     }
   ],
   "forbiddenPaths": [

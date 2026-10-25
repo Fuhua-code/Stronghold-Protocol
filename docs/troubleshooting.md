@@ -1,25 +1,41 @@
 # 故障排查
 
-## doctor 报 master 不正确
+## 每日运行被 skip
 
-`masterDir` 必须是 Git 工作树，当前分支必须精确为 `master`。提交或清理未提交文件后重试。打包器不会自动 stash 或覆盖这些文件。
+`detect` 发现目标仓库已有该上游 tag 的成功草稿或正式 Release。需要重建草稿时手动 dispatch 并勾选 `force`；已正式发布的 Release 不会被 `force` 覆盖。
 
-## 缺少资源或 vendor
+## 下载完整 zip 失败
 
-在 `dependencyDir` 完成依赖安装和 vendor 生成；大型资源应放入 `assetsDir/public/assets`、`assetsDir/public/fonts`，并确保 `data/assets.json` 中的每个 URL 都存在。打包器不会替换、删除或静默下载资源。
+上游 Release 必须包含 `Stronghold-Protocol-v<version>.zip`（排除 lite/update）。检查 Release 资产名、大小、`sha256` digest、网络与 runner 磁盘。失败分类为 `asset-missing-or-mismatch`，不会生成缺素材 APK。
 
-## runtime cache 缺失
+## runtime 校验失败
 
-准备一个包含 `runtime/`、`termux/` 和 `licenses/` 的外部缓存目录，再运行 `packager.cmd bootstrap --source <目录>`。缓存只读复制到打包器自己的 `cache/runtime`，打包器不会调用或修改上游 `mobile/`；缺失时构建直接停止。
+`ci/inputs.json` 固定 `android-runtime-node24.18.0-r1` 的 SHA256；检查目标仓库 Release 资产是否可下载、`input-manifest.json` 是否逐文件匹配。失败分类为 `toolchain/runtime-failure`。
 
-## 覆盖层冲突
+## overlay 预检失败
 
-查看失败时保留的 staging 路径和补丁诊断。检查上游对应文件是否改变了稳定上下文；确认后更新 `overlays/connect/patches`、锚点和 manifest 支持范围。不要忽略冲突继续生成 APK。
+`overlay-preflight.json` 报告 requiredPaths/marker 或 feature 状态。只有 core/requiredPaths 失败会阻断；feature skipped 是预期降级，会由运行时 `sp-extension` 提供 fallback，发布摘要会列出。破坏性更新需要人工适配 `overlays/connect-runtime`，不要忽略后强行出包。
+
+## 构建成功但 feature 降级
+
+0.3.2/0.3.3 的标题、指南、统计页签等 DOM 与 0.3.1 不同，当前 packs 为 6/11 applied。APK 仍可用，设置/导出/棋盘/远程基础能力保留；发布草稿标记 degraded 并列出 skipped。需要完整新 UI 时另开任务补锚点。
 
 ## 签名或无法覆盖安装
 
-确认 keystore、alias、两个密码和 `certificateSha256`。证书指纹可用 `keytool -list -v` 或 `apksigner verify --print-certs` 检查。更换密钥会使 Android 把包视为新应用，不能覆盖旧安装。
+核对 `PACKAGER_KEYSTORE_B64`、alias、两个密码和 `PACKAGER_CERT_SHA256`。证书指纹可用 `keytool -list -v` 或 `apksigner verify --print-certs` 检查。更换密钥会让 Android 视为新应用。
+
+## APK 校验失败
+
+查看 `apk-verify.json` 的 `checks[].ok`、`failures`、runtime ELF unresolved、资源索引和包名/版本。CI 只在全部通过时创建草稿；失败生成/更新反馈 Issue。
+
+## 发布权限/上传失败
+
+publish job 需要 `contents: write`；notify job 需要 `issues: write`。Release 单资产上限 2 GB，APK 约 1.35 GB，上传超时 900 s。失败草稿保留供重试。
+
+## 本地 doctor 报上游/素材缺失
+
+工作台不下载。按 `workbench.config.json`/`packager.config.json` 准备上游、vendor/node_modules、完整素材、runtime cache、JDK/SDK 与 keystore，再运行 `packager.cmd doctor`。
 
 ## 模拟器 ABI
 
-真实 ARM64 手机使用默认包；MuMu、LDPlayer 等 x86_64 模拟器使用 `packager.cmd build --profile connect --abis arm64-v8a,x86_64`。报告中的 `runtimeAbis` 必须包含目标设备 ABI。
+CI 与默认本地构建均为 `arm64-v8a,x86_64`。真实 ARM64 手机与 MuMu 等 x86_64 模拟器均可安装；覆盖安装必须使用同一签名。

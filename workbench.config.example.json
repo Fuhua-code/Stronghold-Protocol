@@ -1,0 +1,9 @@
+{
+  "upstreamDir": "../upstream-src",
+  "outputDir": "outputs/builds",
+  "stateDir": "state",
+  "defaultProfile": "connect-runtime",
+  "versionCodeFloor": 300118,
+  "keepBuilds": 3,
+  "strict": false
+}

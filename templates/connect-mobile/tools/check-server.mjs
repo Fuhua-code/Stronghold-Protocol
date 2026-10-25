@@ -22,6 +22,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { checkBoardRuntimeAssets } from './board-assets.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..', '..');
@@ -260,6 +261,31 @@ async function main() {
         missing.length ? `${missing.length} missing, e.g. ${missing.slice(0, 6).join(', ')}` : `${Math.round((Date.now() - t0) / 1000)} s`);
       report.artUrls = urls.length;
       report.artMissing = missing.slice(0, 50);
+      const publicDir = path.resolve(o.public || path.join(REPO, 'public'));
+      const dataDir = path.resolve(o.data || path.join(REPO, 'data'));
+      let board = { requirements: [], missing: [], count: 0 };
+      try {
+        const localFile = path.join(dataDir, 'local-assets.json');
+        const localManifest = fs.existsSync(localFile) ? JSON.parse(await fsp.readFile(localFile, 'utf8')) : null;
+        board = await checkBoardRuntimeAssets(publicDir, localManifest);
+      } catch (err) {
+        board = { requirements: [], missing: [{ url: '<board-runtime>', reason: err?.message || String(err) }], count: 0 };
+      }
+      const dynamicMissing = [];
+      for (const item of board.requirements) {
+        const r = await request(port, item.url);
+        if (r.status !== 200 || !r.bytes) dynamicMissing.push(`${item.url} (${r.status})`);
+      }
+      check(`all ${board.count} dynamic board URLs → 200`, board.missing.length === 0 && dynamicMissing.length === 0,
+        [...board.missing.map((x) => `${x.url} (${x.reason})`), ...dynamicMissing].slice(0, 8).join(', '));
+      report.boardRuntimeFiles = board.count;
+      report.boardRuntimeMissing = board.missing.slice(0, 30);
+      report.boardRuntimeHttpMissing = dynamicMissing.slice(0, 30);
+      report.sceneRuntimeFiles = board.sceneRuntimeFiles;
+      report.sceneStages = board.sceneStages;
+      report.sceneRuntimeBytes = board.sceneRuntimeBytes;
+      report.sceneRuntimeMissing = board.sceneRuntimeMissing.slice(0, 50);
+      report.sceneManifestFiles = board.sceneManifestFiles;
     }
 
     // ---- /healthz as the app reads it -----------------------------------------------------------------------

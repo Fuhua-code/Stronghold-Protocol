@@ -1,11 +1,12 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { fail, writeJson } from '../cli/common.mjs';
+import { fail, run, writeJson } from '../cli/common.mjs';
 
 export const REPO = process.env.GITHUB_REPOSITORY || 'Fuhua-code/Stronghold-Protocol';
 export const UPSTREAM = 'sganggs/Stronghold-Protocol';
 export const META_PREFIX = '<!-- stronghold-apk:';
+export const META_SUFFIX = ' -->';
 export const ANDROID_MAX = 2_100_000_000;
 
 export function redact(value) {
@@ -17,12 +18,25 @@ export function redact(value) {
 }
 
 export async function api(route, { method = 'GET', body, accept = 'application/vnd.github+json' } = {}) {
-  const res = await fetch(`https://api.github.com${route}`, {
-    method, headers: { Accept: accept, 'User-Agent': 'Stronghold-Protocol-Packager', 'X-GitHub-Api-Version': '2022-11-28',
-      ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}),
-      ...(body ? { 'Content-Type': 'application/json' } : {}) },
-    ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60_000),
-  });
+  const url = `https://api.github.com${route}`;
+  let res;
+  try {
+    res = await fetch(url, {
+      method, headers: { Accept: accept, 'User-Agent': 'Stronghold-Protocol-Packager', 'X-GitHub-Api-Version': '2022-11-28',
+        ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}),
+        ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60_000),
+    });
+  } catch (error) {
+    // Windows schannel/Node fetch can fail behind a strict proxy; GETs still work through curl.
+    if (method !== 'GET') throw error;
+    const tls = process.platform === 'win32' ? ['--ssl-no-revoke'] : [];
+    const headers = ['-H', `Accept: ${accept}`, '-H', 'User-Agent: Stronghold-Protocol-Packager'];
+    if (process.env.GITHUB_TOKEN) headers.push('-H', `Authorization: Bearer ${process.env.GITHUB_TOKEN}`);
+    const result = run('curl', ['-fsSL', '--max-time', '60', ...tls, ...headers, url], { allowFail: true });
+    if (!result.ok) throw error;
+    return JSON.parse(result.out);
+  }
   if (!res.ok) { const e = new Error(`GitHub API ${method} ${route.split('?')[0]} returned ${res.status}`); e.status = res.status; throw e; }
   return res.status === 204 ? null : res.json();
 }
@@ -35,6 +49,7 @@ export async function allReleases() {
   }
 }
 
+/** Schema 2 metadata identifies an APK draft/published release; old releases stay untouched. */
 export function releaseMeta(release) {
   const raw = /<!-- stronghold-apk:(.*?) -->/.exec(release.body || '')?.[1];
   if (!raw) {
@@ -42,8 +57,12 @@ export function releaseMeta(release) {
     return null;
   }
   let m; try { m = JSON.parse(raw); } catch { fail('Malformed automated Release metadata', 'release-failure'); }
-  if (m.schema !== 1 || !/^[0-9a-f]{40}$/.test(m.sha) || !Number.isSafeInteger(m.versionCode) || m.versionCode < 1 || m.versionCode > ANDROID_MAX) fail('Invalid automated Release metadata', 'release-failure');
+  if (m.schema !== 2 || m.kind !== 'apk' || typeof m.upstreamTag !== 'string' || !m.upstreamTag || !/^[0-9a-f]{40}$/.test(m.upstreamSha || '') || typeof m.version !== 'string' || !Number.isSafeInteger(m.versionCode) || m.versionCode < 1 || m.versionCode > ANDROID_MAX) fail('Invalid automated Release metadata', 'release-failure');
   return m;
+}
+
+export function metadataFooter(meta) {
+  return `${META_PREFIX}${JSON.stringify(meta)}${META_SUFFIX}`;
 }
 
 export async function sha256(file) {

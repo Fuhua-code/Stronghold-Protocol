@@ -15,7 +15,7 @@ export function resolveFrom(base, value) { return path.resolve(base, value || '.
 export function fail(message, code = 'PACKAGER_ERROR') { const e = new Error(message); e.code = code; throw e; }
 
 export function classifyBuildFailure(error) {
-  if (['overlay-contract-break','asset-missing-or-mismatch','signing-failure','apk-verification-failure','toolchain/runtime-failure','upstream-test-failure','release-failure'].includes(error?.code)) return error.code;
+  if (['overlay-contract-break','asset-missing-or-mismatch','signing-failure','apk-verification-failure','toolchain/runtime-failure','upstream-test-failure','release-failure','upstream-source-changed'].includes(error?.code)) return error.code;
   const text = String(error?.message || error).toLowerCase();
   if (/overlay patch conflict|overlay contract|does not support master|contract marker/.test(text)) return 'overlay-contract-break';
   if (/asset manifest|assets\.json|local-assets|asset archive|resource manifest/.test(text)) return 'asset-missing-or-mismatch';
@@ -92,18 +92,40 @@ export function loadConfig() {
   const file = path.join(PACKAGER, 'packager.config.json');
   if (!exists(file)) fail(`missing ${file}; copy packager.config.example.json to packager.config.json and configure the master path and signing key`);
   const raw = readJson(file); const base = path.dirname(file);
-  return { ...raw, file, masterDir: resolveFrom(base, raw.masterDir), dependencyDir: resolveFrom(base, raw.dependencyDir || raw.masterDir), assetsDir: resolveFrom(base, raw.assetsDir || raw.masterDir), toolchainDir: resolveFrom(base, raw.toolchainDir || '../.toolchain'), runtimeCacheDir: resolveFrom(base, raw.runtimeCacheDir || 'cache/runtime'), outputDir: resolveFrom(base, raw.outputDir || 'outputs'), packageName: raw.packageName || 'io.prts.stronghold', minimumVersionCode: Number(raw.minimumVersionCode || 4) };
+  const workbenchFile = path.join(PACKAGER, 'workbench.config.json');
+  const workbench = exists(workbenchFile) ? readJson(workbenchFile) : {};
+  const workbenchBase = path.dirname(workbenchFile);
+  const config = { ...raw, file, masterDir: resolveFrom(base, raw.masterDir), dependencyDir: resolveFrom(base, raw.dependencyDir || raw.masterDir), assetsDir: resolveFrom(base, raw.assetsDir || raw.masterDir), completeAssetsDir: raw.completeAssetsDir ? resolveFrom(base, raw.completeAssetsDir) : null, toolchainDir: resolveFrom(base, raw.toolchainDir || '../.toolchain'), runtimeCacheDir: resolveFrom(base, raw.runtimeCacheDir || 'cache/runtime'), outputDir: resolveFrom(base, raw.outputDir || 'outputs'), packageName: raw.packageName || 'io.prts.stronghold', minimumVersionCode: Number(raw.minimumVersionCode || 4) };
+  config.workbench = workbench;
+  if (workbench.upstreamDir) config.masterDir = resolveFrom(workbenchBase, workbench.upstreamDir);
+  if (workbench.defaultProfile) config.defaultProfile = workbench.defaultProfile;
+  const inputs = workbench.inputs || {};
+  for (const key of ['assetsDir', 'localAssetsDir', 'completeAssetsDir', 'fontsDir', 'runtimeCacheDir', 'toolchainDir']) {
+    if (inputs[key]) config[key] = resolveFrom(workbenchBase, inputs[key]);
+  }
+  if (inputs.keystore) config.keystore = resolveFrom(workbenchBase, inputs.keystore);
+  config.versionCodeFloor = Number(workbench.versionCodeFloor || raw.versionCodeFloor || 0);
+  config.keepBuilds = Math.max(1, Number(workbench.keepBuilds || 3));
+  config.buildsDir = workbench.buildsDir
+    ? resolveFrom(workbenchBase, workbench.buildsDir)
+    : (workbench.outputDir ? resolveFrom(workbenchBase, workbench.outputDir) : config.outputDir);
+  config.stateDir = resolveFrom(workbenchBase, workbench.stateDir || 'state');
+  config.strict = workbench.strict === true || raw.strict === true;
+  return config;
 }
 
 export function parseArgs(argv) {
-  const out = { command: 'build', profile: null, abis: null, apk: null, allowDirty: false, json: null, versionCode: null };
+  const out = { command: 'build', profile: null, abis: null, apk: null, allowDirty: false, committedAssetsManifest: false, json: null, versionCode: null, keep: null, master: null, allowAnySource: false, strict: false };
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--allow-dirty') { out.allowDirty = true; continue; }
+    if (a === '--committed-assets-manifest') { out.committedAssetsManifest = true; continue; }
+    if (a === '--allow-any-source') { out.allowAnySource = true; continue; }
+    if (a === '--strict') { out.strict = true; continue; }
     if (!a.startsWith('-')) { positional.push(a); continue; }
     const [key, inline] = a.split('=', 2);
-    const needsValue = ['--profile', '--abis', '--abi', '--apk', '--json', '--version-code'].includes(key);
+    const needsValue = ['--profile', '--abis', '--abi', '--apk', '--json', '--version-code', '--keep', '--master'].includes(key);
     if (!needsValue) fail(`unknown option ${a}`);
     const value = inline ?? argv[++i];
     if (value == null || String(value).startsWith('--')) fail(`${key} requires a value`);
@@ -111,10 +133,18 @@ export function parseArgs(argv) {
     else if (key === '--abis' || key === '--abi') out.abis = String(value).split(',').filter(Boolean);
     else if (key === '--apk') out.apk = value;
     else if (key === '--json') out.json = value;
-    else if (key === '--version-code') {
-      const code = Number(value);
-      if (!Number.isSafeInteger(code) || code < 1 || code > 2_100_000_000) fail(`invalid --version-code: ${value}`);
-      out.versionCode = code;
+    else if (key === '--master') out.master = value;
+    else if (key === '--keep') {
+      const n = Number(value);
+      if (!Number.isInteger(n) || n < 1) fail(`invalid --keep: ${value}`);
+      out.keep = n;
+    } else if (key === '--version-code') {
+      if (String(value).toLowerCase() === 'auto') out.versionCode = 'auto';
+      else {
+        const code = Number(value);
+        if (!Number.isSafeInteger(code) || code < 1 || code > 2_100_000_000) fail(`invalid --version-code: ${value}`);
+        out.versionCode = code;
+      }
     }
   }
   if (positional[0]) out.command = positional[0];

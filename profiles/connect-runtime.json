@@ -1,0 +1,26 @@
+{
+  "id": "connect-runtime",
+  "description": "Wrapper 反代 + 启动期存储/导出桥 + UI overlay（服务端与 persistence 不再改上游源码）",
+  "overlay": "connect-runtime",
+  "mobileTemplate": "connect-mobile",
+  "persistence": false,
+  "injectedTests": ["test/connect-runtime.test.mjs"],
+  "extension": {
+    "dir": "templates/connect-extension",
+    "boot": "boot.js",
+    "ui": "ui.js",
+    "css": "connect.css"
+  },
+  "requiredPaths": [
+    "public/js/connect.js",
+    "public/js/screens/title.js",
+    "public/js/screens/lobby.js",
+    "public/js/ui/guide.js",
+    "shared/connect.js",
+    "server/http/remote.js",
+    "server/http/hostGuard.js",
+    "mobile/node/main.js",
+    "mobile/node/wrapper.js",
+    "test/connect-runtime.test.mjs"
+  ]
+}

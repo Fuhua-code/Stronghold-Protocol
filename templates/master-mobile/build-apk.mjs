@@ -816,6 +816,20 @@ async function prepareNodejsProject({ withDev, abis = [] }) {
   await copyTree(path.join(REPO, 'mobile', 'node'), path.join(dest, 'mobile', 'node'));
   await fsp.mkdir(path.join(dest, 'docs'), { recursive: true });
   await copyTree(path.join(REPO, 'docs', 'research'), path.join(dest, 'docs', 'research'));
+  // The 0.3.x server loads the Spine/atlas parsers from tools/assets at runtime
+  // through server/plugins and server/studio modules. Keep this small shared
+  // parser set in the mobile runtime; desktop-only tools remain excluded. A
+  // missing parser must fail the build rather than crash on first use on-device.
+  const toolAssets = path.join(REPO, 'tools', 'assets');
+  const requiredToolAssets = ['skel.mjs', 'atlas.mjs', 'anim-roles.mjs'];
+  if (exists(path.join(REPO, 'server', 'plugins', 'pack.js'))) {
+    if (!exists(toolAssets)) fail('server/plugins/pack.js requires tools/assets, but the source checkout has no tools/assets directory');
+    const missingToolAssets = requiredToolAssets.filter((name) => !exists(path.join(toolAssets, name)));
+    if (missingToolAssets.length) fail(`tools/assets is incomplete; missing ${missingToolAssets.join(', ')}`);
+    await copyTree(toolAssets, path.join(dest, 'tools', 'assets'));
+  } else if (exists(toolAssets)) {
+    await copyTree(toolAssets, path.join(dest, 'tools', 'assets'));
+  }
 
   // 2. the client, minus the dev harnesses: this is what makes the APK work offline
   const pubSrc = path.join(REPO, 'public');
@@ -834,23 +848,24 @@ async function prepareNodejsProject({ withDev, abis = [] }) {
   const artHash = await hashTree(pubDst);
   await fsp.writeFile(path.join(pubDst, 'ASSETS-VERSION'), `${pkgVersion}-${artHash}\n`);
 
-  // 3. the only runtime dependency of the server, at the project root: `server/index.js` imports 'ws' by bare
-  //    specifier, and Node resolves that by walking up from the importing module — so it has to live in a
-  //    node_modules directory that contains (or is above) `server/`. The whole package directory is copied (minus
-  //    a nested node_modules) because `ws` maps its ESM entry point through `wrapper.mjs`.
-  const wsDest = path.join(dest, 'node_modules', 'ws');
-  const wsSrc = path.join(REPO, 'node_modules', 'ws');
-  if (!exists(wsSrc)) fail('node_modules/ws is missing; run `npm install` first');
-  // (the filter is relative to the package, so it never matches the repository's own node_modules path)
-  await copyTree(wsSrc, wsDest, { filter: (p, rel) => !/(^|[\\/])node_modules([\\/]|$)/.test(rel) });
-  // `ws` is CommonJS while the project itself is ESM: `node_modules/package.json` pins the module system for
-  // everything below it, so `import { WebSocketServer } from 'ws'` keeps working from the ESM server.
-  await fsp.writeFile(path.join(dest, 'node_modules', 'package.json'), '{ "type": "commonjs" }\n');
+  // 3. Production server dependencies. `ws` handles /ws and 0.3.x plugin/studio
+  // modules import `acorn` while parsing untrusted scripts. Keep this list small
+  // and explicit: browser-only packages and dev dependencies do not belong in APK.
+  const runtimeDependencies = ['ws', 'acorn'];
+  for (const name of runtimeDependencies) {
+    const depSrc = path.join(REPO, 'node_modules', name);
+    if (!exists(depSrc)) fail(`node_modules/${name} is missing; run \`npm install\` first`);
+    await copyTree(depSrc, path.join(dest, 'node_modules', name), {
+      filter: (p, rel) => !/(^|[\\/])node_modules([\\/]|$)/.test(rel),
+    });
+  }
+  // Preserve ws package metadata. ws 8.x exposes an ESM wrapper through its
+  // `import` export; replacing package.json breaks named imports in server/http.
 
   // 4. a package.json so the Node runtime and tools see a normal project. `type: module` is required: the game is
   //    ESM everywhere (including this entry point), and Node resolves a `.js` file's module system from the nearest
-  //    package.json. The vendored `ws` needs `"type": "commonjs"` — the reverse — which is why it carries a
-  //    package.json of its own inside mobile/node/node_modules (see above).
+  //    package.json. ws carries its own exports map and selects the ESM
+  //    wrapper for imports while retaining CommonJS compatibility.
   const pkg = JSON.parse(await fsp.readFile(path.join(REPO, 'package.json'), 'utf8'));
   await fsp.writeFile(path.join(dest, 'package.json'), JSON.stringify({
     name: 'stronghold-protocol-android-runtime',
@@ -973,10 +988,14 @@ async function writeAndroidProject({ abis, versionName, packageName }) {
 
   // Java sources + resources shipped with the mobile project (MainActivity, mipmaps, …)
   await copyTree(path.join(ANDROID, 'res'), path.join(gen, 'res'));
-  const activity = await fsp.readFile(path.join(ANDROID, 'java', 'io', 'prts', 'stronghold', 'MainActivity.java'), 'utf8');
+  const javaSources = path.join(ANDROID, 'java', 'io', 'prts', 'stronghold');
   const packageDir = path.join(gen, 'src', ...packageName.split('.'));
   await fsp.mkdir(packageDir, { recursive: true });
-  await fsp.writeFile(path.join(packageDir, 'MainActivity.java'), activity.replace('package io.prts.stronghold;', 'package ' + packageName + ';'));
+  for (const name of await fsp.readdir(javaSources)) {
+    if (!name.endsWith('.java')) continue;
+    const source = await fsp.readFile(path.join(javaSources, name), 'utf8');
+    await fsp.writeFile(path.join(packageDir, name), source.replace('package io.prts.stronghold;', 'package ' + packageName + ';'));
+  }
 
   // the assets tree (nodejs-project) at the root of assets/
   await copyTree(path.join(BUILD, 'nodejs-project'), path.join(gen, 'assets', 'nodejs-project'));
@@ -1264,6 +1283,14 @@ async function verifyApk(apk, { apksigner, aapt2, abis, expectedArt, expectNode 
   const need = ['classes.dex', 'resources.arsc', 'AndroidManifest.xml', 'assets/nodejs-project/mobile/node/main.js', 'assets/nodejs-project/public/index.html', 'assets/nodejs-project/data/chess.json', 'assets/nodejs-project/server/index.js', 'assets/nodejs-project/shared/constants.js'];
   if (expectNode) {
     need.push('assets/nodejs-project/node_modules/ws/package.json', 'assets/nodejs-project/node_modules/ws/lib/websocket.js');
+    // 0.3.x server/plugins/pack.js imports these parsers at runtime.
+    if (entries.has('assets/nodejs-project/server/plugins/pack.js')) {
+      need.push(
+        'assets/nodejs-project/tools/assets/skel.mjs',
+        'assets/nodejs-project/tools/assets/atlas.mjs',
+        'assets/nodejs-project/tools/assets/anim-roles.mjs',
+      );
+    }
     // every entry point the package's own export map references must be packaged (a missing `wrapper.mjs` is
     // exactly how the first on-device run failed)
     const wsPkg = JSON.parse(await fsp.readFile(path.join(REPO, 'node_modules', 'ws', 'package.json'), 'utf8'));

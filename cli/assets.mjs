@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { exists, fail, hashTree, manifestUrls, readJson } from './common.mjs';
+import { checkBoardRuntimeAssets } from '../templates/common/board-assets.mjs';
 
 async function normalizeResourceCase(stage, url) {
   const parts = url.split('/').filter(Boolean).map(decodeURIComponent);
@@ -51,6 +52,23 @@ export async function checkAssets(stage) {
     try { const stat = await fs.stat(p); if (!stat.isFile() || stat.size === 0) missing.push(url); } catch { missing.push(url); }
   }
   if (missing.length) fail(`asset manifest is incomplete: ${missing.length}/${urls.length} missing (e.g. ${missing.slice(0, 8).join(', ')})`, 'asset-missing-or-mismatch');
+  const localManifest = exists(path.join(stage, 'data', 'local-assets.json'))
+    ? readJson(path.join(stage, 'data', 'local-assets.json')) : null;
+  const board = await checkBoardRuntimeAssets(path.join(stage, 'public'), localManifest);
+  if (board.sceneRuntimeMissing.length) {
+    const detail = board.sceneRuntimeMissing.slice(0, 12).map((x) => `${x.url} [${x.reason}]`).join(', ');
+    fail(`dynamic scene resource closure is incomplete: ${board.sceneRuntimeMissing.length} issue(s) across ${board.sceneStages.length} stages (${detail})`, 'asset-missing-or-mismatch');
+  }
+  if (board.missing.length) {
+    const detail = board.missing.slice(0, 10).map((x) => `${x.url} [${x.reason}]`).join(', ');
+    fail(`dynamic board asset closure is incomplete: ${board.missing.length}/${board.count} missing (${detail})`, 'asset-missing-or-mismatch');
+  }
   const tree = await hashTree(path.join(stage, 'public'));
-  return { manifests, manifestFiles: urls.length, publicFiles: tree.files, publicSha256: tree.digest };
+  return {
+    manifests, manifestFiles: urls.length, boardRuntimeFiles: board.count,
+    sceneRuntimeFiles: board.sceneRuntimeFiles, sceneStages: board.sceneStages,
+    sceneRuntimeBytes: board.sceneRuntimeBytes, sceneRuntimeMissing: board.sceneRuntimeMissing,
+    sceneManifestFiles: board.sceneManifestFiles,
+    publicFiles: tree.files, publicSha256: tree.digest,
+  };
 }

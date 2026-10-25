@@ -2,44 +2,37 @@
 
 ## 目录和配置
 
-`masterDir` 指向用户同步后的上游 `master`，不能指向联机分支。`dependencyDir` 提供已经准备好的 `public/vendor` 与 `node_modules/ws`；`assetsDir` 提供大体积美术、字体和 `data/local-assets.json`。`toolchainDir` 需要包含 `jdk` 和 `android-sdk`。
+`upstreamDir`/`masterDir` 指向用户同步后的上游工作树。静态工作台只读取并复制，不 fetch、不切换、不写入上游。`dependencyDir` 提供 `public/vendor` 与 `node_modules/ws|acorn`；`assetsDir`/`completeAssetsDir`/`localAssetsDir` 提供 `public/assets`、`public/fonts` 和 `data/local-assets.json`；`toolchainDir` 需要包含 `jdk` 与 `android-sdk`。
 
-签名配置支持 `keystore`、`keyAlias`、`certificateSha256`，密码只从 `PACKAGER_STORE_PASSWORD` 与 `PACKAGER_KEY_PASSWORD` 读取。证书指纹必须与已安装 APK 一致，否则构建会停止，避免生成无法覆盖安装的 APK。
+`workbench.config.json` 控制 `upstreamDir`、`outputDir`、`stateDir`、默认 profile、`versionCodeFloor`、保留份数和 strict；`packager.config.json` 控制本机输入与签名。两者都不提交，示例见 `*.example.json`。密码只从 `PACKAGER_STORE_PASSWORD` 与 `PACKAGER_KEY_PASSWORD` 读取。
 
 ## 命令
 
 ```text
 packager.cmd doctor
-packager.cmd bootstrap --source <已准备的 runtime/termux/licenses 目录>
-packager.cmd                         # connect + arm64-v8a
-packager.cmd build --profile master
-packager.cmd build --profile connect --abis arm64-v8a,x86_64
+packager.cmd version
+packager.cmd workbench
+packager.cmd build --profile connect-runtime --version-code auto
+packager.cmd build --profile connect-runtime --master <上游目录> --allow-dirty
+packager.cmd build --profile connect                  # 旧 overlay fallback
 packager.cmd verify --apk <APK绝对路径>
-packager.cmd clean                   # 删除 staging 和 outputs，保留 runtime cache
+packager.cmd clean                                    # 只删 staging 和失败标记
 ```
 
-`master` profile 不使用远程入口、远程指南、探测接口、代理或独立远程 WebView；`connect` profile 在上游源码上应用版本化远程覆盖层，并使用联机 Android 模板。覆盖层按稳定锚点检查，冲突时停止并保留 staging 目录供诊断。`bootstrap --source` 只读复制已经准备好的 Android runtime 缓存，不调用或修改上游 `mobile/`。
+`workbench` 先运行 doctor，再构建 `connect-runtime`，默认 `--version-code auto --keep 3`。产物在 `outputs/builds/<version>/<profile>/<versionCode>-<sourceHash>/`，包含 APK、`build-report.json`、`overlay-report.json`、`compat-report.json`、`BUILD-NOTICE.txt`、`apk-verify.json` 和 `SHA256SUMS.txt`。`state/latest.json` 指向最近一次构建，可能是 degraded。
 
-## 更新上游后的标准流程
+## 版本
 
-用户先在上游目录执行：
-
-```text
-git fetch upstream
-git switch master
-git pull --ff-only upstream master
-```
-
-确认 `git status` 干净后回到打包器目录运行 `packager.cmd doctor` 和 `packager.cmd`。新的 `package.json.version` 自动成为 APK `versionName`；版本代码由 `major*1000000 + minor*1000 + patch` 计算，同一提交可重复构建。
+`versionCode` 本地单调递增：`auto` 取 `max(floor, 历史最后值 + 1)`；显式值不得低于历史最后一次。CI 从 300118 起，并把草稿 Release 计入历史；首次上游 0.3.x 构建为 300118，之后 300119+。旧 2004/300117 不会回退。
 
 ## 安装和测试
 
 ```text
-adb install -r outputs/<版本>/connect/Stronghold-Protocol-<版本>-arm64-v8a.apk
+adb install -r outputs/builds/<version>/<profile>/<code>-<hash>/Stronghold-Protocol-<version>-arm64-v8a-x86_64.apk
 ```
 
-ARM64 包用于真实手机；MuMu 等 x86_64 模拟器使用双 ABI 命令。覆盖安装必须使用同一 keystore 和 alias。构建报告的 `status` 必须为 `success`，APK 检查报告的所有 `checks[].ok` 必须为 `true` 后再交付。
+覆盖安装必须使用同一 keystore 和 alias。构建报告 `status` 为 `success` 或 `degraded`；degraded 表示部分 UI feature 使用了运行时 fallback，APK 仍可用。`apk-verify.json` 的所有 `checks[].ok` 必须为 `true`。失败时 staging 保留在 `.staging/<version>-<profile>-<code>-...` 供诊断，不修改上游。
 
 ## Agent 自动流程
 
-Agent 应依次运行 `doctor`、`build`，读取 `build-report.json`、`apk-verify.json` 和 `SHA256SUMS.txt`。只有 `status=success`、源分支为 `master`、源工作树为 clean、签名指纹匹配且所有 APK 检查通过时，才报告构建完成。失败时保留 `.staging/<版本>-<profile>-<pid>-<时间戳>`，修复原因后重新运行，不修改 master。
+运行 `doctor`、`workbench`，读取 `build-report.json`、`compat-report.json`、`apk-verify.json` 和 `SHA256SUMS.txt`。只有 `status` 为 `success|degraded`、签名指纹匹配且所有 APK 检查通过时才报告完成；degraded 必须同时报告 skipped feature。

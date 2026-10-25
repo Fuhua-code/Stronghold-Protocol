@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { removeIfExists, PACKAGER, loadConfig } from './common.mjs';
-const config = loadConfig();
-await removeIfExists(`${PACKAGER}/.staging`);
-await removeIfExists(config.outputDir);
-console.log('Removed staging and output artifacts. Runtime cache was preserved.');
+import path from 'node:path';
+import { removeIfExists, PACKAGER } from './common.mjs';
+await removeIfExists(path.join(PACKAGER, '.staging'));
+await removeIfExists(path.join(PACKAGER, 'outputs', 'failure-report.json'));
+console.log('Removed staging and the failure marker. Build outputs, state and runtime cache were preserved.');

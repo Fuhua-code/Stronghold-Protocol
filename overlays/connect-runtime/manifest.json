@@ -1,0 +1,112 @@
+{
+  "id": "connect-runtime",
+  "version": "2.0.0",
+  "sourceVersion": {
+    "min": "0.2.2",
+    "maxMajor": 0,
+    "maxMinor": 3
+  },
+  "patches": [],
+  "files": [
+    {
+      "source": "files/shared/connect.js",
+      "destination": "shared/connect.js"
+    },
+    {
+      "source": "files/public/js/connect.js",
+      "destination": "public/js/connect.js"
+    },
+    {
+      "source": "files/server/http/remote.js",
+      "destination": "server/http/remote.js"
+    },
+    {
+      "source": "files/server/http/hostGuard.js",
+      "destination": "server/http/hostGuard.js"
+    },
+    {
+      "source": "files/public/js/ui/remote-entry.js",
+      "destination": "public/js/ui/remote-entry.js"
+    },
+    {
+      "source": "files/public/js/ui/remote-guide.js",
+      "destination": "public/js/ui/remote-guide.js"
+    },
+    {
+      "source": "files/public/js/ui/remote-settings.js",
+      "destination": "public/js/ui/remote-settings.js"
+    },
+    {
+      "source": "files/public/js/ui/remote-records.js",
+      "destination": "public/js/ui/remote-records.js"
+    },
+    {
+      "source": "files/public/css/connect.css",
+      "destination": "public/css/connect.css"
+    },
+    {
+      "source": "files/public/js/remote-session.js",
+      "destination": "public/js/remote-session.js"
+    },
+    {
+      "source": "files/public/js/render/board-runtime.js",
+      "destination": "public/js/render/board-runtime.js"
+    },
+    {
+      "source": "files/test/connect-runtime.test.mjs",
+      "destination": "test/connect-runtime.test.mjs"
+    }
+  ],
+  "anchors": [],
+  "requiredPaths": [
+    "public/js/connect.js",
+    "shared/connect.js",
+    "server/http/remote.js",
+    "server/http/hostGuard.js",
+    "server/http/routes.js",
+    "server/http/websocket.js",
+    "server/index.js",
+    "mobile/node/main.js",
+    "test/connect-runtime.test.mjs",
+    "public/js/ui/remote-entry.js",
+    "public/js/ui/remote-guide.js",
+    "public/js/ui/remote-settings.js",
+    "public/js/ui/remote-records.js",
+    "public/css/connect.css",
+    "public/js/remote-session.js",
+    "public/js/render/board-runtime.js",
+    "mobile/node/wrapper.js"
+  ],
+  "requiredMarkers": [
+    {
+      "path": "server/http/remote.js",
+      "text": "createWsProxy"
+    },
+    {
+      "path": "server/http/remote.js",
+      "text": "expectedCompat"
+    },
+    {
+      "path": "public/js/ui/remote-entry.js",
+      "text": "selectRemoteTarget"
+    },
+    {
+      "path": "public/js/ui/remote-entry.js",
+      "text": "alertDialog"
+    },
+    {
+      "path": "server/http/remote.js",
+      "text": "/connect/records"
+    },
+    {
+      "path": "server/http/remote.js",
+      "text": "recordsMirrorFile"
+    }
+  ],
+  "forbiddenPaths": [
+    "turn-space",
+    "HF_TOKEN",
+    "FastRTC"
+  ],
+  "packs": "packs.json"
+}

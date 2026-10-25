@@ -1,14 +1,45 @@
-# 上游自动 APK 发布
+# 每日上游 Release APK
 
-`Upstream connect APK` 位于默认分支 `main`。每 6 小时（UTC 00:17 / 06:17 / 12:17 / 18:17）读取上游 `master`；GitHub schedule 为尽力调度，可能延迟。它仅临时检出源码，不写回游戏 `master`，也不自动修改覆盖层。
+`Upstream release APK` 位于默认分支 `main`，按 **每日 UTC 03:17** 检查上游 `sganggs/Stronghold-Protocol` 的最新正式 Release（GitHub schedule 为尽力调度，可能延迟）。它只临时检出上游 Release tag，不写入目标仓库 `master`，也不自动修改覆盖层。
 
-## 触发与验收
+## 触发
 
-Actions → Upstream connect APK → Run workflow。`upstream_sha` 留空检查最新上游；诊断时填完整 40 位 SHA。勾选 `dry_run` 时仍完成双 ABI 构建与签名验证，只保存 14 天 artifact，不发布 Release。`main` 的打包逻辑变更也触发 dry run。
+- 每日 schedule：无新 Release 时快速 skip。
+- Actions → Upstream release APK → Run workflow：
+  - `release_tag` 留空 = 最新正式版；可填 `v0.3.3` 等。
+  - `force` = 重建同 tag 的草稿；**不会覆盖已正式发布的 Release**。
+  - `dry_run` = 完成构建、签名与校验，只保留 14 天 artifact，不创建 Release。
+- `main` 的 `cli/ci/templates/overlays/profiles` 变更触发 dry run，便于先验证打包器改动。
 
-成功 Release 标签是 `apk-<游戏版本>-<完整上游SHA>`。已发布 SHA 再次运行直接退出，不覆盖旧包。整个工作流串行执行，避免并发分配相同版本代码。Release 元数据记录成功 SHA，作为持久监测状态。
+整个工作流按仓库串行（`concurrency`），避免并发分配相同 versionCode。
 
-`versionName` 等于上游版本；`versionCode` 取 SemVer 编码、全部已发布自动 APK 的最高代码加一、既有发布迁移下限三者的最大值。同版本多个 SHA 递增；即使重建较旧版本也不能倒退。现有打包器 0.2.1 代码为 2001，因此自动发布从至少 2002 开始。旧 Release 不自动修改。超过 Android 的 2100000000 上限时禁止发布。APK 不保证逐字节可复现（签名和报告含时间）；固定来源、哈希和版本使输入与结果可追溯。
+## 输入
+
+- **源码**：`git fetch --depth=1` 上游 Release tag，检出为 `upstream-source` 的 `master`，校验 commit SHA。
+- **完整素材/依赖**：上游 Release 的 `Stronghold-Protocol-v<version>.zip`（例如 0.3.3 约 861 MB），内含 `public/assets`、`public/fonts`、`public/vendor`、`node_modules`；下载后校验 release `size` 与 `sha256` digest（若 GitHub 提供），解压并校验包版本。
+- **Runtime**：固定 `android-runtime-node24.18.0-r1` Release（约 115 MB），按 `ci/inputs.json` 的 SHA256 和 `input-manifest.json` 逐文件校验。
+- **工具链**：Ubuntu 22.04、Node 22.22.0、Temurin 17.0.14+7、build-tools 35.0.0、android-35；第三方 Action 按 commit SHA 固定。
+- 旧 `android-assets-*` bundle 不再参与新流程，但历史 Release 资产保留。
+
+## 成功：草稿 Release
+
+构建成功（`status=success|degraded`）后创建/更新 **draft** Release：
+
+- tag：`apk-<游戏版本>-<完整上游SHA>`
+- name：`Android <version> · <sha8> · code <versionCode>`
+- 正文：构建摘要（v0.3.3 起 6/11 feature applied 时列为 degraded），包含上游 Release 链接、版本/versionCode、profile/overlay、applied/skipped feature、APK SHA256、签名/APK 校验与 Actions 链接；**不复制上游长文，也不自动 publish**。
+- 资产：APK（约 1.35 GB）、`SHA256SUMS.txt`、`build-report.json`、`overlay-report.json`、`compat-report.json`、`apk-verify.json`、`overlay-tests.log`、`BUILD-NOTICE.txt`、`input-report.json`、`upstream-release.json`、`release-meta.json`。
+
+已存在的成功草稿会在每日检测中跳过；`force` 只重建草稿。已正式发布的 Release 不会被自动覆盖，检测会直接 skip。
+
+## 失败：Issue，不生成 Release
+
+上游测试、输入下载/校验、overlay core、签名、APK 校验或发布校验失败时：
+
+- 按上游 SHA 创建/更新一个反馈 Issue（同一 SHA 只维护一个）。
+- Issue 包含分类（`overlay-contract-break`、`asset-missing-or-mismatch`、`toolchain/runtime-failure`、`signing-failure`、`apk-verification-failure`、`release-failure` 等）、脱敏错误摘要、Actions 日志/诊断 artifact 链接。
+- **不创建、不修改任何 APK Release**；已有草稿/正式 Release 保留。
+- 成功生成草稿后关闭对应 Issue；dry-run 成功不关闭生产 Issue。
 
 ## Secrets
 
@@ -20,47 +51,20 @@ Actions → Upstream connect APK → Run workflow。`upstream_sha` 留空检查�
 | `PACKAGER_KEY_ALIAS` | 既有 alias |
 | `PACKAGER_STORE_PASSWORD` | 密钥库密码 |
 | `PACKAGER_KEY_PASSWORD` | key 密码 |
-| `PACKAGER_CERT_SHA256` | 已安装版本证书的 SHA256，64 位十六进制 |
+| `PACKAGER_CERT_SHA256` | 已安装 APK 证书的 SHA256，64 位十六进制 |
 
-仅在构建步骤注入签名 Secret。密钥解码到 runner 临时目录；构建后即删除。上游与注入后的测试、APK 解包启动检查不继承密钥、密码或 Token。证书在签名前和 APK 签名后分别核验。签名启用 V1/V2/V3，缺少 Secret 时失败，不生成新密钥。
+keystore 只在 runner 临时目录解码，构建后删除；上游测试、APK 解包检查和报告不携带密码/Token。缺少 Secret 会失败并进入反馈 Issue。
 
-检查/构建 job 只有 `contents: read`；发布 job 有 `contents: write`；报告 job 有 `issues: write`。管理员需允许 Actions 创建 Release/Issue。失败 Issue 的通知遵循你的 GitHub 通知设置，可在仓库 Watch 中启用 Issues，并在 GitHub Notifications 中启用 Actions 失败通知。
+权限：`detect`/`build` 需要 `contents: write` 才能读取尚未发布的 Release 草稿（GitHub 只向有写权限的 token 列出 drafts）；`publish` 需要 `contents: write`；`notify` 只需要 `contents: read` + `issues: write`。仓库管理员需允许 Actions 创建 Release/Issue。
 
-## 可复用资源与 runtime
+## 版本
 
-冷 runner 从公开专用 Release 恢复资源 bundle 与 Termux runtime，随后按 `ci/inputs.json` 中的归档 SHA256 和 bundle 内逐文件清单检查。资源 bundle 不再按游戏版本精确绑定，也不要求其中的 `data/assets.json` 与上游字节级一致；打包器会读取当前上游的 `data/assets.json` 和 `data/local-assets.json`，选择完整覆盖其引用资源的 bundle。bundle 可以包含额外资源，清单格式或顺序变化不会阻断构建。归档损坏、文件哈希不匹配、路径不安全或当前上游有资源缺失仍会停止并报告具体路径。
+`versionCode` 历史来自所有 schema 2 成功 Release（**含草稿**），忽略失败 Issue 和旧无元数据 Release。新版本取 `max(SemVer 编码, 历史最大 + 1, 300118)`；首个 0.3.3 构建为 300118，之后 300119+。草稿计入历史，避免每日重复分配；正式 Release 优先，`force` 不覆盖。上限 2,100,000,000。
 
-维护者在本机已验证的资源目录上准备新包：
+## Runner 与磁盘
 
-```text
-node ci/make-input.mjs assets <完整资源目录> <游戏版本> outputs/new-assets <对应master目录>
-node ci/make-input.mjs runtime <runtime缓存目录> node24.18.0-r1 outputs/new-runtime
-```
-
-上传 archive、`SHA256SUMS.txt`、`input-manifest.json` 至资源或 runtime Release；在 `ci/inputs.json` 的 `assets.bundles` 中追加 tag/file/sha256，可选填 `sourceVersion` 和 `priority`。已有 bundle 不覆盖；资源变化时创建新的 bundle。runtime 仍使用固定版本与哈希，包含原始 Node/native libraries、固定签名 Termux InRelease/index、deb 与许可文件；构建仍用仓库固定 Termux 公钥校验索引。新 runtime 必须更新版本与哈希。
-
-如果没有任何 bundle 完整覆盖当前上游清单，工作流会分类为 `asset-missing-or-mismatch`，报告候选 bundle 的覆盖率和缺失路径；它不会生成一个缺少素材的 APK，也不需要修改打包器代码来支持新版本。
-
-Linux runner 使用 Ubuntu 22.04、Node 22.22.0、Temurin 17.0.14+7、SDK build-tools 35.0.0、android-35、系统 GnuPG/tar/xz。Actions 依赖按 commit SHA 固定；JDK 发行版与 SDK 版本由固定 Actions/官方安装源供应。完整资源约 555 MB、压缩输入约 421 MB，APK 为数百 MB；runner 至少应有约 8 GB 可用空间。工作流构建上限 75 分钟，下载上限 10 分钟；失败保留日志和报告，不上传 staging、keystore 或未签名 APK。
-
-## 失败处理
-
-| 分类 | 处理 |
-| --- | --- |
-| `overlay-contract-break` | 补丁冲突、版本范围或 marker 变化；这是破坏性更新，人工适配覆盖层 |
-| `upstream-test-failure` | 上游或注入后测试/服务检查失败 |
-| `asset-missing-or-mismatch` | 准备能覆盖当前清单的资源 bundle，或核对 manifest/hash |
-| `toolchain/runtime-failure` | 检查 SDK、固定 runtime 输入、下载服务、磁盘容量 |
-| `signing-failure` | 核对 Secret、alias、证书；不要更换签名身份 |
-| `apk-verification-failure` | 排查包内源码、资源、版本、ELF 或解包启动检查 |
-| `release-failure` | 排查 Release 权限、上传、历史元数据或版本上限 |
-
-同一上游 SHA 只创建一个 Issue，重试更新正文；成功发布后关闭对应 Issue。失败始终令 Workflow 失败，日志摘要脱敏。上传先创建 draft，全部产物齐全后才公开；失败草稿留作重试，旧成功 Release 不变。dry run 成功不关闭生产阻断 Issue。
+完整 zip 约 861 MB，解压约 1.26 GB；staging、APK 和输出还会占数 GB。构建前清理非必要 runner 目录并输出 `df -h`；build job 上限 120 分钟，publish 30 分钟。若磁盘不足，工作流会明确失败，不会生成缺素材 APK。
 
 ## 分支与 Pages
 
-默认分支变为 `main` 后，现有 PR 的目标分支无需改变。`master` 应由维护者快进同步上游；APK Actions 不修改它。Pages 继续保留在 `feat/github-pages-standalone`。`main` 保留 Pages 的手动部署工作流入口，它显式 checkout Pages 分支；Pages 分支的 push 触发也继续有效。游戏源码不会合并进 `main`。
-
-上游完整测试在原始临时 checkout 中运行。注入后的 staging 运行专门的联机集成测试，验证健康兼容字段、地址校验、代理控制权限、WebSocket 首包排队、文本/二进制转发、清理及用户确认回退；不在无 Git 元数据且只含运行时依赖的 staging 中重复执行 Git/开发工具检查。完整注入测试日志写入构建诊断产物。
-
-覆盖层 1.1.2 支持上游 0.2.2 起的模块化 HTTP/WebSocket 入口。标题页仅对 loopback 注入本地/远程按钮，非本机入口保留上游开始按钮；安卓远程指南位于标题页。本机资源代理须通过应用、数字协议、内容兼容指纹、首页与 WebSocket 校验。旧服务器缺少兼容字段时需要用户确认进入远端完整页面。
+`master` 由维护者自行同步上游；APK Actions 不修改它。Pages 继续由 `feat/github-pages-standalone` 的独立 workflow 管理，`main` 不合并游戏源码。

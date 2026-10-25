@@ -1,9 +1,12 @@
 # Stronghold Protocol Android Packager
 
-独立 Android 打包器与上游自动发布工作流。`main` 只维护打包器和联机覆盖层；`master` 为上游游戏镜像。打包器不会修改源工作树，也不会自动修复上游破坏性接口变更。
+独立、离线的 Android 静态工作台与上游 Release 自动出包仓库。`main` 只维护打包器、运行时扩展和自动化；`master` 是游戏源码镜像，本仓库的 Actions 不修改它。
 
 - 本机使用：[打包器指南](docs/README.md)、[操作步骤](docs/usage.md)
-- 自动发布：[GitHub Actions 部署与故障处理](docs/automation.md)
-- 上游更新：[升级 master](docs/upgrade-master.md)
+- 自动发布：[每日上游 Release APK](docs/automation.md)
+- 上游更新：[升级与兼容](docs/upgrade-master.md)
+- 兼容矩阵：[COMPAT-MATRIX.md](docs/COMPAT-MATRIX.md)
 
-默认联机包保留本地游玩、局域网、远程 UI、严格地址/版本校验、本机素材复用 WebSocket 代理及 Android 证书人工确认回退。云端自动发布仅构建 `connect` 双 ABI；本机另支持纯 `master` profile。
+默认 profile 为 `connect-runtime`：本地游玩 + 远程入口/记录 + 启动期存储/导出桥 + 可选 UI feature packs。`connect` 旧 overlay 保留为显式 fallback，`master` profile 仅生成纯上游包。
+
+GitHub Actions 每日检查上游 `sganggs/Stronghold-Protocol` 的正式 Release；有新版本时下载完整 Release zip 构建双 ABI APK。构建成功创建 **Release 草稿**（正文为构建摘要，不自动发布）；构建失败创建/更新反馈 Issue，不生成失败 Release。

@@ -27,6 +27,7 @@ import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { checkBoardRuntimeAssets } from './board-assets.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..', '..');
@@ -241,6 +242,50 @@ async function main() {
   check('every packaged asset unpacks with a valid CRC', true, `${assets.length} files, ${(bytes / 1048576).toFixed(1)} MB in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
   if (sourceMatches) check('packaged project matches build inputs byte-for-byte', true, `${sourceMatches} files`);
 
+  // ---- the WebView local-art index: every row points at a stored, size-matching packaged file ------------
+  const artIndexFile = path.join(projectDir, 'art-index.tsv');
+  let artIndexRows = [];
+  let artIndexError = null;
+  try {
+    const text = await fsp.readFile(artIndexFile, 'utf8');
+    artIndexRows = text.split(/\r?\n/).filter((line) => line && !line.startsWith('#')).map((line) => {
+      const [url, fileHash, modelHashes, size, mime, assetPath] = line.split('\t');
+      if (!url || !fileHash || !size || !mime || !assetPath) throw new Error(`bad row: ${line.slice(0, 120)}`);
+      return { url, fileHash, modelHashes: modelHashes || '-', size: Number(size), mime, assetPath };
+    });
+  } catch (e) { artIndexError = e; }
+  const artIndexMissing = artIndexRows.filter((r) => !byName.has(`assets/nodejs-project/${r.assetPath}`)).slice(0, 20);
+  const artIndexCompressed = artIndexRows.filter((r) => {
+    const e = byName.get(`assets/nodejs-project/${r.assetPath}`);
+    return e && e.method !== 0;
+  }).slice(0, 20);
+  const sizeMismatch = artIndexRows.filter((r) => {
+    try { return fs.statSync(path.join(projectDir, r.assetPath)).size !== r.size; } catch { return true; }
+  }).slice(0, 20);
+  let hashChecked = 0;
+  let hashMismatch = [];
+  for (const row of artIndexRows.filter((_, i) => i % Math.max(1, Math.floor(artIndexRows.length / 32)) === 0).slice(0, 32)) {
+    try {
+      const buf = await fsp.readFile(path.join(projectDir, row.assetPath));
+      const own = crypto.createHash('sha256').update(buf).digest('hex').slice(0, 16);
+      const models = row.modelHashes === '-' ? [] : row.modelHashes.split(',');
+      if (own !== row.fileHash && !models.includes(own)) {
+        // a model row's URL hash is the model hash; verify that the row's file hash at least matches
+        if (own !== row.fileHash) hashMismatch.push(row.url);
+      }
+      hashChecked++;
+    } catch { hashMismatch.push(row.url); }
+  }
+  check('local art index matches packaged art', !artIndexError && artIndexRows.length > 30000
+      && artIndexMissing.length === 0 && artIndexCompressed.length === 0 && sizeMismatch.length === 0 && hashMismatch.length === 0,
+    artIndexError ? artIndexError.message
+      : `${artIndexRows.length} rows, missing ${artIndexMissing.length}, compressed ${artIndexCompressed.length}, size mismatch ${sizeMismatch.length}, hash mismatch ${hashMismatch.length}, sampled ${hashChecked}`);
+  report.artIndexRows = artIndexRows.length;
+  report.artIndexHashChecked = hashChecked;
+  report.artIndexMissing = artIndexMissing;
+  report.artIndexCompressed = artIndexCompressed;
+  report.artIndexSizeMismatch = sizeMismatch;
+
   // ---- run the unpacked project with a Node 22+ interpreter (the runtime the APK ships is Node 24) ----------
   const exe = resolveNode(o.node) || process.execPath;
   const version = (await new Promise((r) => {
@@ -297,6 +342,26 @@ async function main() {
     const local = path.join(projectDir, 'data', 'local-assets.json');
     if (fs.existsSync(local)) walk(JSON.parse(await fsp.readFile(local, 'utf8')));
     const uniq = [...new Set(urls)];
+    let board = { requirements: [], missing: [], count: 0 };
+    try {
+      const localManifest = fs.existsSync(local) ? JSON.parse(await fsp.readFile(local, 'utf8')) : null;
+      board = await checkBoardRuntimeAssets(path.join(projectDir, 'public'), localManifest);
+    } catch (err) {
+      board = { requirements: [], missing: [{ url: '<board-runtime>', reason: err?.message || String(err) }], count: 0 };
+    }
+    const boardZipMissing = board.requirements
+      .map((item) => decodeURIComponent(item.url))
+      .filter((url) => !byName.has('assets/nodejs-project/public' + url));
+    check(`dynamic board closure (${board.count} files) is present`, board.missing.length === 0 && boardZipMissing.length === 0,
+      [...board.missing.map((x) => `${x.url} (${x.reason})`), ...boardZipMissing.map((x) => `${x} (not in APK)`)].slice(0, 8).join(', '));
+    report.boardRuntimeFiles = board.count;
+    report.boardRuntimeMissing = board.missing.slice(0, 30);
+    report.boardRuntimeZipMissing = boardZipMissing.slice(0, 30);
+    report.sceneRuntimeFiles = board.sceneRuntimeFiles;
+    report.sceneStages = board.sceneStages;
+    report.sceneRuntimeBytes = board.sceneRuntimeBytes;
+    report.sceneRuntimeMissing = board.sceneRuntimeMissing.slice(0, 50);
+    report.sceneManifestFiles = board.sceneManifestFiles;
     const absent = uniq.filter(url => !byName.has('assets/nodejs-project/public' + url));
     check('all standard and local manifest assets packaged', absent.length === 0, `${uniq.length} URLs; missing: ${absent.slice(0,3).join(', ')}`);
     const marker = await fsp.readFile(path.join(projectDir, 'public', 'ASSETS-VERSION'), 'utf8');
