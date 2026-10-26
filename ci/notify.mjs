@@ -33,8 +33,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   for (const candidate of ['outputs/automation-failure.json', 'outputs/outputs/automation-failure.json', 'outputs/failure-report.json']) {
     try { report = JSON.parse(await fs.readFile(candidate, 'utf8')); break; } catch { /* absent artifact */ }
   }
-  let publish;
-  try { publish = JSON.parse(await fs.readFile('outputs/publish-result.json', 'utf8')); } catch { publish = null; }
+  let publish = null;
+  for (const candidate of ['outputs/publish-result.json', 'publish-result.json']) {
+    try { publish = JSON.parse(await fs.readFile(candidate, 'utf8')); break; } catch { /* absent artifact */ }
+  }
   const result = await reportIssue({
     tag: process.env.UPSTREAM_TAG || 'unresolved',
     sha: process.env.UPSTREAM_SHA || 'unresolved',

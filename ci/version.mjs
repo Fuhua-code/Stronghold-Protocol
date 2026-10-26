@@ -34,16 +34,26 @@ export function allocateVersion({ version, upstreamTag, upstreamSha, releases, m
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    const detection = process.env.UPSTREAM_TAG
+    let detected = null;
+    try { detected = readJson('outputs/detection.json'); } catch { /* detection artifact not present */ }
+    const detection = detected
       ? {
+          ...detected,
+          tag: process.env.UPSTREAM_TAG || detected.tag,
+          sha: process.env.UPSTREAM_SHA || detected.sha,
+          version: process.env.APP_VERSION || detected.version,
+          releaseUrl: process.env.UPSTREAM_RELEASE_URL || detected.releaseUrl || null,
+          publishedAt: process.env.UPSTREAM_PUBLISHED_AT || detected.publishedAt || null,
+          releaseName: process.env.UPSTREAM_RELEASE_NAME || detected.releaseName || null,
+        }
+      : {
           tag: process.env.UPSTREAM_TAG,
           sha: process.env.UPSTREAM_SHA,
           version: process.env.APP_VERSION,
           releaseUrl: process.env.UPSTREAM_RELEASE_URL || null,
           publishedAt: process.env.UPSTREAM_PUBLISHED_AT || null,
           releaseName: process.env.UPSTREAM_RELEASE_NAME || null,
-        }
-      : readJson('outputs/detection.json');
+        };
     const pins = readJson('ci/inputs.json');
     const meta = allocateVersion({
       version: detection.version,

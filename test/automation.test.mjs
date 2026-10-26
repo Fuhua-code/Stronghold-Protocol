@@ -135,8 +135,9 @@ test('failure notification creates one Issue and never touches Releases', async 
   assert.match(issues[0].title, /破坏性更新/);
   assert.match(issues[0].body, /marker changed/);
   assert.ok(routes.every((route) => route.includes('/issues')));
-  await reportIssue({ tag, sha, version, succeeded: true, runId: '1' }, client);
+  await reportIssue({ tag, sha, version, succeeded: true, releaseUrl: 'https://example.test/draft', runId: '1' }, client);
   assert.equal(issues[0].state, 'closed');
+  assert.match(issues[0].body, /example\.test\/draft/);
   await reportIssue({ tag, sha, version, succeeded: true, dryRun: true, runId: '1' }, client);
   assert.equal(issues[0].state, 'closed');
 });
