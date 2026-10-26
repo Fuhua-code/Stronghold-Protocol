@@ -18,7 +18,7 @@
 - **源码**：`git fetch --depth=1` 上游 Release tag，检出为 `upstream-source` 的 `master`，校验 commit SHA。
 - **完整素材/依赖**：上游 Release 的 `Stronghold-Protocol-v<version>.zip`（例如 0.3.3 约 861 MB），内含 `public/assets`、`public/fonts`、`public/vendor`、`node_modules`；下载后校验 release `size` 与 `sha256` digest（若 GitHub 提供），解压并校验包版本。
 - **Runtime**：固定 `android-runtime-node24.18.0-r1` Release（约 115 MB），按 `ci/inputs.json` 的 SHA256 和 `input-manifest.json` 逐文件校验。
-- **工具链**：Ubuntu 22.04、Node 22.22.0、Temurin 17.0.14+7、build-tools 35.0.0、android-35；第三方 Action 按 commit SHA 固定。
+- **工具链**：Ubuntu 22.04、Node 22.22.0、Temurin 17.0.14+7、build-tools 35.0.0、android-35；上游素材测试另装 Python 3 Pillow（`python3 -m pip install pillow`）；第三方 Action 按 commit SHA 固定。
 - 旧 `android-assets-*` bundle 不再参与新流程，但历史 Release 资产保留。
 
 ## 成功：草稿 Release

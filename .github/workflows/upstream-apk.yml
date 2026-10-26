@@ -86,6 +86,8 @@ jobs:
           node-version: '22.22.0'
       - name: Packager unit tests before downloading large inputs
         run: npm test
+      - name: Python Pillow for upstream asset extraction tests
+        run: python3 -m pip install --quiet pillow
       - name: Free runner disk for full assets, staging and APK
         run: |
           df -h .
