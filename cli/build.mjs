@@ -82,6 +82,7 @@ async function applyExtension(stage, profile, overlay) {
   let html = await fsp.readFile(index, 'utf8');
   const headTags = [
     ...(css ? [`<link rel="stylesheet" href="/sp-extension/${css}">`] : []),
+    ...(/href="\/css\/connect\.css"/.test(html) ? [] : ['<link rel="stylesheet" href="/css/connect.css">']),
     `<script src="/sp-extension/${boot}"></script>`,
   ].filter((tag) => !html.includes(tag));
   if (headTags.length) {

@@ -5,7 +5,7 @@
 const FEATURES_URL = '/sp-extension/features.json';
 const NOTICE_KEY = 'sp.extension.notice';
 const PANEL_ID = 'spx-panel';
-const FALLBACK_FEATURES = ['title', 'guide', 'settings', 'stats-tab'];
+const FALLBACK_FEATURES = ['settings', 'stats-tab'];
 
 function el(tag, cls, text) {
   const node = document.createElement(tag);
@@ -269,14 +269,6 @@ function openPanel(tab) {
   panel.openTab(tab || 'connect');
 }
 
-function addTitleButton() {
-  if (document.querySelector('[data-spx="title"]')) return;
-  const fab = button('远程', 'spx-fab', () => openPanel('connect'));
-  fab.dataset.spx = 'title';
-  fab.title = '远程连接（兼容入口）';
-  document.body.appendChild(fab);
-}
-
 function syncDom(skipped) {
   if (skipped.has('stats-tab')) {
     for (const host of document.querySelectorAll('.st-top__right')) {
@@ -323,7 +315,6 @@ async function main() {
   const skipped = new Set(list.filter((f) => f.status === 'skipped').map((f) => f.id));
   const hasFallback = FALLBACK_FEATURES.some((id) => skipped.has(id));
   if (!hasFallback && !(features.degraded || []).length) return;
-  if (skipped.has('title') || (skipped.has('guide') && !skipped.has('stats-tab') && !skipped.has('settings'))) addTitleButton();
   showNotice(features);
   if (!skipped.has('stats-tab') && !skipped.has('settings')) return;
   const sync = () => { try { syncDom(skipped); } catch { /* page is navigating */ } };

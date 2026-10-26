@@ -13,8 +13,8 @@
 `overlays/connect-runtime/manifest.json` 声明 sourceVersion 范围与辅助文件契约；`packs.json` 逐个 feature 检查锚点：
 
 - core/requiredPaths/marker 失败 → `overlay-contract-break`，构建阻断并更新反馈 Issue。
-- 单个 feature 锚点不命中 → 只跳过该 feature；运行时 `templates/connect-extension` 提供 fallback，APK 仍可构建。
-- `title` 依赖 `guide` 与 `css`，缺失时整体跳过，避免坏 import。
+- 单个 feature 锚点不命中 → 只跳过该 feature；settings/stats 使用内联 fallback，APK 仍可构建。
+- `title`/`guide` 已从锚点 packs 移除：初始界面由 overlay 原样携带 300115 的 `title.js`/`guide.js`/`title.css` 等 6 个文件；`title-files.json` 校验 SHA256，并检查旧标题依赖的公开导出。缺失则 blocked，不会退回浮窗或重新做一套标题。
 - `connect` 旧 overlay 保留为显式 fallback，不由工作台/CI 自动切换。
 
 上游变化后先跑 `packager.cmd build --profile connect-runtime --master <新目录> --allow-dirty --version-code <临时值>`（或 CI 的 `dry_run`），查看 `compat-report.json`/`overlay-preflight.json`。需要完整 UI 时再补 packs 锚点，不要改上游源码。

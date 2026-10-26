@@ -18,7 +18,7 @@
 
 ## 构建成功但 feature 降级
 
-0.3.2/0.3.3 的标题、指南、统计页签等 DOM 与 0.3.1 不同，当前 packs 为 6/11 applied。APK 仍可用，设置/导出/棋盘/远程基础能力保留；发布草稿标记 degraded 并列出 skipped。需要完整新 UI 时另开任务补锚点。
+0.3.2/0.3.3 的标题、指南、统计页签等 DOM 与 0.3.1 不同，但 `connect-runtime` 已用 300115 的 `title.js`/`guide.js`/`title.css` 等 6 个文件原样替换上游标题，初始界面保持不变；packs 为 7/10 applied（title-ui + css/settings/export/i18n/board-runtime/board），stats-tab/stats-src/ui-extras skipped。没有浮动远程按钮；设置/统计只保留内联兼容入口。若标题/启动 contract 缺失，构建会 blocked 而不是退回浮窗。
 
 ## 签名或无法覆盖安装
 

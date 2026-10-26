@@ -7,6 +7,6 @@
 - 上游更新：[升级与兼容](docs/upgrade-master.md)
 - 兼容矩阵：[COMPAT-MATRIX.md](docs/COMPAT-MATRIX.md)
 
-默认 profile 为 `connect-runtime`：本地游玩 + 远程入口/记录 + 启动期存储/导出桥 + 可选 UI feature packs。`connect` 旧 overlay 保留为显式 fallback，`master` profile 仅生成纯上游包。
+默认 profile 为 `connect-runtime`：本地游玩 + 远程入口/记录 + 启动期存储/导出桥 + 可选 UI feature packs。初始界面不重新设计：overlay 原样携带 300115 的标题/指南/CSS 六个文件并做 SHA256 校验；上游漂移不会把它换成浮动远程按钮。`connect` 旧 overlay 保留为显式 fallback，`master` profile 仅生成纯上游包。
 
 GitHub Actions 每日检查上游 `sganggs/Stronghold-Protocol` 的正式 Release；有新版本时下载完整 Release zip 构建双 ABI APK。构建成功创建 **Release 草稿**（正文为构建摘要，不自动发布）；构建失败创建/更新反馈 Issue，不生成失败 Release。

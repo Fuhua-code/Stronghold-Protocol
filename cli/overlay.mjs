@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { copyTree, exists, fail, PACKAGER, parseSemver, readJson, run } from './common.mjs';
+import { copyTree, exists, fail, hashFile, PACKAGER, parseSemver, readJson, run } from './common.mjs';
 
 const TEXT_EXTENSIONS = new Set(['.cjs', '.cmd', '.css', '.html', '.java', '.js', '.json', '.mjs', '.md', '.ps1', '.sh', '.toml', '.ts', '.txt', '.xml', '.yaml', '.yml']);
 
@@ -106,6 +106,27 @@ export async function applyFeaturePacks(stage, root, spec) {
   return { version: data?.version || 1, mode: 'packs', features, degraded };
 }
 
+export async function verifyFrozenTitle(stage, root) {
+  const specFile = path.join(root, 'title-files.json');
+  if (!exists(specFile)) return null;
+  const spec = readJson(specFile);
+  for (const row of spec.files || []) {
+    const target = path.join(stage, row.path);
+    if (!exists(target)) fail(`frozen title file missing: ${row.path}`, 'overlay-contract-break');
+    const actual = await hashFile(target);
+    if (actual !== row.sha256) fail(`frozen title file changed: ${row.path}`, 'overlay-contract-break');
+  }
+  for (const row of spec.contract || []) {
+    const target = path.join(stage, row.path);
+    if (!exists(target)) fail(`title contract file missing: ${row.path}`, 'overlay-contract-break');
+    const text = await fs.readFile(target, 'utf8');
+    for (const marker of row.markers || []) {
+      if (!text.includes(marker)) fail(`title contract export missing: ${row.path} → ${marker}`, 'overlay-contract-break');
+    }
+  }
+  return { files: (spec.files || []).length, contract: (spec.contract || []).length };
+}
+
 export async function applyOverlay(stage, config, profile, sourceVersion) {
   if (!profile.overlay) return { id: null, applied: [], files: [] };
   const root = path.join(PACKAGER, 'overlays', profile.overlay);
@@ -165,11 +186,12 @@ export async function applyOverlay(stage, config, profile, sourceVersion) {
     anchors.push({ path: anchor.path, find: selected.find });
   }
   const packs = manifest.packs ? await applyFeaturePacks(stage, root, manifest.packs) : null;
+  const titleFiles = await verifyFrozenTitle(stage, root);
   await verifyContracts(stage, manifest);
   for (const forbidden of manifest.forbiddenPaths || []) {
     if (exists(path.join(stage, forbidden))) fail(`overlay contains forbidden path: ${forbidden}`);
     const hit = await forbiddenContent(stage, forbidden);
     if (hit) fail(`overlay contains forbidden token "${forbidden}" in ${hit}`);
   }
-  return { id: manifest.id, version: manifest.version, applied, copied, anchors, packs, files: manifest.requiredPaths || [] };
+  return { id: manifest.id, version: manifest.version, applied, copied, anchors, packs, titleFiles, files: manifest.requiredPaths || [] };
 }

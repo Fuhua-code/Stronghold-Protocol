@@ -2,79 +2,13 @@
   "version": 1,
   "features": [
     {
-      "id": "guide",
-      "label": "远程指南",
-      "fallback": "面板内指南",
-      "warning": true,
-      "markers": [
-        {
-          "path": "public/js/ui/guide.js",
-          "text": "RemoteGuideButton"
-        }
-      ],
-      "anchors": [
-        {
-          "path": "public/js/screens/lobby.js",
-          "find": "import { GuideButton } from '../ui/guide.js';",
-          "replace": "import { GuideButton, RemoteGuideButton } from '../ui/guide.js';\nimport { androidBridge, isLoopbackHost } from '../connect.js';"
-        },
-        {
-          "path": "public/js/screens/lobby.js",
-          "find": "          <${GuideButton} class=\"lobby-guide\" variant=\"secondary\" square=${true} />",
-          "replace": "          <${GuideButton} class=\"lobby-guide\" variant=\"secondary\" square=${true} />\n          ${isLoopbackHost() && !androidBridge() ? html`<${RemoteGuideButton} class=\"lobby-remote-guide\" variant=\"secondary\" />` : null}"
-        },
-        {
-          "path": "public/js/ui/guide.js",
-          "find": "export const guideStore = createStore({ open: false, page: 0 });",
-          "replace": "export const guideStore = createStore({ open: false, page: 0, kind: 'play' });"
-        },
-        {
-          "path": "public/js/ui/guide.js",
-          "find": "  guideStore.set({ open: true, page: Math.max(0, page | 0) });",
-          "replace": "  guideStore.set({ open: true, page: Math.max(0, page | 0), kind: 'play' });"
-        },
-        {
-          "path": "public/js/ui/guide.js",
-          "find": "function preload(url) {",
-          "replace": "export function RemoteGuideButton({ class: cls, size = 'sm', variant = 'ghost' }) {\n  return html`<${Button} variant=${variant} size=${size} icon=\"book\" class=${cx('guide-btn', cls)}\n    onClick=${() => guideStore.set({ open: true, page: 0, kind: 'remote' })} title=\"远程指南\" aria-label=\"远程指南\">远程指南<//>`;\n}\n\nfunction preload(url) {"
-        },
-        {
-          "path": "public/js/ui/guide.js",
-          "find": "import { html, Icon, MicroLabel, Button, Spinner } from './components.js';",
-          "replace": "import { html, Icon, MicroLabel, Button, Spinner } from './components.js';\nimport { RemoteGuide } from './remote-guide.js';"
-        },
-        {
-          "path": "public/js/ui/guide.js",
-          "find": "  const { open, page } = useStore((s) => s, Object.is, guideStore);",
-          "replace": "  const { open, page, kind } = useStore((s) => s, Object.is, guideStore);\n  const remote = kind === 'remote';"
-        },
-        {
-          "path": "public/js/ui/guide.js",
-          "find": "  const n = pages.length;",
-          "replace": "  const n = remote ? 0 : pages.length;"
-        },
-        {
-          "path": "public/js/ui/guide.js",
-          "find": "  const stage = guideStage(cur, failed);",
-          "replace": "  const stage = remote ? { kind: 'remote' } : guideStage(cur, failed);"
-        },
-        {
-          "path": "public/js/ui/guide.js",
-          "find": "class=\"guide__box brackets\"",
-          "replace": "class=${remote ? \"guide__box guide__box--remote brackets\" : \"guide__box brackets\"}"
-        },
-        {
-          "path": "public/js/ui/guide.js",
-          "find": "<h2 class=\"guide__title\">${t('玩法说明')}</h2>",
-          "replace": "<h2 class=\"guide__title\">${remote ? '远程指南' : t('玩法说明')}</h2>"
-        },
-        {
-          "path": "public/js/ui/guide.js",
-          "find": "<${TipsFallback} />",
-          "replace": "${remote ? html`<${RemoteGuide} />` : html`<${TipsFallback} />`}"
-        }
-      ],
-      "optional": true
+      "id": "title-ui",
+      "label": "初始界面",
+      "fallback": "无；标题契约缺失时阻断",
+      "warning": false,
+      "optional": false,
+      "markers": [],
+      "anchors": []
     },
     {
       "id": "css",
@@ -90,40 +24,6 @@
         }
       ],
       "optional": true
-    },
-    {
-      "id": "title",
-      "label": "远程入口",
-      "fallback": "浮动远程按钮/独立面板",
-      "warning": true,
-      "markers": [
-        {
-          "path": "public/js/screens/title.js",
-          "text": "isLoopbackHost()"
-        }
-      ],
-      "anchors": [
-        {
-          "path": "public/js/screens/title.js",
-          "find": "import { GuideButton } from '../ui/guide.js';",
-          "replace": "import { GuideButton, RemoteGuideButton } from '../ui/guide.js';\nimport { androidBridge, isLoopbackHost } from '../connect.js';\nimport { RemoteEntry } from '../ui/remote-entry.js';"
-        },
-        {
-          "path": "public/js/screens/title.js",
-          "find": "        <${TextField} label=${t('博士代号')} micro=\"CALLSIGN\" size=\"lg\" icon=\"user\" value=${name} maxLength=${NAME_MAX_LEN}\n          placeholder=${t('输入你的代号（最多 {NAME_MAX_LEN} 字）', { NAME_MAX_LEN })} autoFocus=${!touchUi}\n          onInput=${setName} onEnter=${start} />\n        <${Button} variant=\"primary\" size=\"xl\" block=${true} iconRight=\"chevrons\" disabled=${!valid} onClick=${start}>${t('开始')}<//>",
-          "replace": "        ${isLoopbackHost() ? html`<${RemoteEntry} initialName=${name} onLocalStart=${enterSession} validateName=${isValidName} touchUi=${touchUi} />` : html`\n        <${TextField} label=${t('博士代号')} micro=\"CALLSIGN\" size=\"lg\" icon=\"user\" value=${name} maxLength=${NAME_MAX_LEN}\n          placeholder=${t('输入你的代号（最多 {NAME_MAX_LEN} 字）', { NAME_MAX_LEN })} autoFocus=${!touchUi}\n          onInput=${setName} onEnter=${start} />\n        <${Button} variant=\"primary\" size=\"xl\" block=${true} iconRight=\"chevrons\" disabled=${!valid} onClick=${start}>${t('开始')}<//>\n        `}"
-        },
-        {
-          "path": "public/js/screens/title.js",
-          "find": "          <${GuideButton} class=\"title-guide\" label=${t('玩法说明')} />",
-          "replace": "          ${androidBridge() ? html`<${RemoteGuideButton} class=\"title-guide\" />` : html`<${GuideButton} class=\"title-guide\" label=${t('玩法说明')} />`}"
-        }
-      ],
-      "optional": true,
-      "requires": [
-        "guide",
-        "css"
-      ]
     },
     {
       "id": "settings",

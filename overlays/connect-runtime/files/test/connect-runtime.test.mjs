@@ -29,6 +29,12 @@ test('runtime profile: wrapper serves the pristine upstream, injected extension 
   assert.ok(!routes.includes('handleRemote'), 'runtime staging must not mount the control router in upstream routes');
   assert.ok(fs.existsSync(path.join(ROOT, 'server/http/remote.js')), 'control router is staged as an auxiliary file');
   assert.ok(fs.existsSync(path.join(ROOT, 'public/sp-extension/boot.js')), 'boot bridge is injected');
+  const title = fs.readFileSync(path.join(ROOT, 'public/js/screens/title.js'), 'utf8');
+  assert.ok(title.includes('RemoteEntry') && title.includes('RemoteGuideButton'), '300115 title design is frozen in place');
+  assert.ok(fs.readFileSync(path.join(ROOT, 'public/js/ui/guide.js'), 'utf8').includes('RemoteGuideButton'));
+  assert.ok(fs.readFileSync(path.join(ROOT, 'public/css/screens/title.css'), 'utf8').includes('.title-main'));
+  assert.ok(!fs.readFileSync(path.join(ROOT, 'public/sp-extension/ui.js'), 'utf8').includes('addTitleButton'));
+  assert.ok(!fs.readFileSync(path.join(ROOT, 'public/sp-extension/connect.css'), 'utf8').includes('.spx-fab'));
 
   const server = await startWrapper({ publicDir: path.join(ROOT, 'public'), dataDir: path.join(ROOT, 'data'), host: '127.0.0.1', port: 0 });
   try {
@@ -42,6 +48,14 @@ test('runtime profile: wrapper serves the pristine upstream, injected extension 
     const page = await get(server.port, '/', { origin: false });
     assert.equal(page.status, 200);
     assert.ok(page.body.includes('/sp-extension/boot.js'), 'staged index references the boot bridge');
+    assert.ok(page.body.includes('/css/connect.css'), 'staged index loads the frozen remote-entry stylesheet');
+
+    const titleScript = await get(server.port, '/js/screens/title.js', { origin: false });
+    assert.equal(titleScript.status, 200);
+    assert.ok(titleScript.body.includes('RemoteEntry'));
+    const titleCss = await get(server.port, '/css/screens/title.css', { origin: false });
+    assert.equal(titleCss.status, 200);
+    assert.ok(titleCss.body.includes('.title-main'));
 
     const boot = await get(server.port, '/sp-extension/boot.js', { origin: false });
     assert.equal(boot.status, 200);
@@ -54,6 +68,7 @@ test('runtime profile: wrapper serves the pristine upstream, injected extension 
     assert.equal(report.mode, 'packs');
     assert.ok(Array.isArray(report.features) && report.features.length >= 1);
     assert.ok(Array.isArray(report.degraded));
+    assert.equal(report.features.find((feature) => feature.id === 'title-ui')?.status, 'applied');
 
     const info = await get(server.port, '/connect/info');
     assert.equal(info.status, 200);

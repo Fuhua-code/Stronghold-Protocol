@@ -1,0 +1,187 @@
+{
+  "schema": 1,
+  "source": "Stronghold-Protocol-0.3.1 300115 APK assets/nodejs-project/public",
+  "files": [
+    {
+      "path": "public/js/screens/title.js",
+      "sha256": "b6ad9e26896a974b6848c27855524e86be1284a25a62ca325e30a0fbe18963ec",
+      "bytes": 15446
+    },
+    {
+      "path": "public/js/ui/guide.js",
+      "sha256": "36f62d09882df3e1c57508a1fb1b0675b378343797127c2177bb036861bdd009",
+      "bytes": 11813
+    },
+    {
+      "path": "public/css/screens/title.css",
+      "sha256": "42b51ed9a4d341df7b4aaaedb2ae534397112357b44626558dab195db0050f17",
+      "bytes": 15215
+    },
+    {
+      "path": "public/js/ui/remote-entry.js",
+      "sha256": "b243ff0d39bc43ee533533eff5a2aca42ff43535a5ed37bfee0af9c8191a0101",
+      "bytes": 2475
+    },
+    {
+      "path": "public/js/ui/remote-guide.js",
+      "sha256": "3898385bb439963c67ac564aa552c54d1ce0169630c28804762cdc08cdc79b8a",
+      "bytes": 3035
+    },
+    {
+      "path": "public/css/connect.css",
+      "sha256": "bbf25c4b7bd45501d0b64889a80c6145e847ac1d2af83f6b84159c45b2e0357b",
+      "bytes": 6542
+    }
+  ],
+  "contract": [
+    {
+      "path": "public/js/screens/stats.js",
+      "markers": [
+        "openStats"
+      ]
+    },
+    {
+      "path": "public/js/ui/settings.js",
+      "markers": [
+        "SettingsModal"
+      ]
+    },
+    {
+      "path": "public/js/ui/lang.js",
+      "markers": [
+        "LangToggle",
+        "useLang"
+      ]
+    },
+    {
+      "path": "public/js/net.js",
+      "markers": [
+        "identity",
+        "net"
+      ]
+    },
+    {
+      "path": "public/js/store.js",
+      "markers": [
+        "store",
+        "useStore",
+        "shallowEqual"
+      ]
+    },
+    {
+      "path": "public/js/ui/playerName.js",
+      "markers": [
+        "sanitizeName",
+        "isValidName"
+      ]
+    },
+    {
+      "path": "public/js/ui/components.js",
+      "markers": [
+        "Button",
+        "TextField",
+        "Modal"
+      ]
+    },
+    {
+      "path": "public/js/ui/device.js",
+      "markers": [
+        "FullscreenButton",
+        "PwaInstallButton",
+        "detectFeatures"
+      ]
+    },
+    {
+      "path": "public/js/ui/gameComponents.js",
+      "markers": [
+        "GIcon"
+      ]
+    },
+    {
+      "path": "public/js/ui/notices.js",
+      "markers": [
+        "NoticesButton"
+      ]
+    },
+    {
+      "path": "public/js/ui/resumeMatch.js",
+      "markers": [
+        "ResumeMatchButton"
+      ]
+    },
+    {
+      "path": "public/js/ui/assetDownload.js",
+      "markers": [
+        "AssetDownloadButton"
+      ]
+    },
+    {
+      "path": "public/js/ui/assetImport.js",
+      "markers": [
+        "AssetImportButton"
+      ]
+    },
+    {
+      "path": "public/js/content.js",
+      "markers": [
+        "installedCount"
+      ]
+    },
+    {
+      "path": "public/js/data.js",
+      "markers": [
+        "useData"
+      ]
+    },
+    {
+      "path": "public/js/connect.js",
+      "markers": [
+        "isLoopbackHost",
+        "androidBridge"
+      ]
+    },
+    {
+      "path": "public/js/ui/remote-entry.js",
+      "markers": [
+        "RemoteEntry"
+      ]
+    },
+    {
+      "path": "public/js/ui/remote-guide.js",
+      "markers": [
+        "RemoteGuide"
+      ]
+    },
+    {
+      "path": "public/js/ui/toasts.js",
+      "markers": [
+        "toast"
+      ]
+    },
+    {
+      "path": "public/js/ui/pluginPanel.js",
+      "markers": [
+        "InstalledPlugins"
+      ]
+    },
+    {
+      "path": "shared/i18nPacks.js",
+      "markers": [
+        "scriptOf"
+      ]
+    },
+    {
+      "path": "shared/constants.js",
+      "markers": [
+        "NAME_MAX_LEN",
+        "APP_VERSION"
+      ]
+    },
+    {
+      "path": "shared/i18n.js",
+      "markers": [
+        "N_"
+      ]
+    }
+  ]
+}

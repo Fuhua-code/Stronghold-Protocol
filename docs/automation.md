@@ -27,7 +27,7 @@
 
 - tag：`apk-<游戏版本>-<完整上游SHA>`
 - name：`Android <version> · <sha8> · code <versionCode>`
-- 正文：构建摘要（v0.3.3 起 6/11 feature applied 时列为 degraded），包含上游 Release 链接、版本/versionCode、profile/overlay、applied/skipped feature、APK SHA256、签名/APK 校验与 Actions 链接；**不复制上游长文，也不自动 publish**。
+- 正文：构建摘要（v0.3.3 起 7/10 feature applied 时列为 degraded），包含上游 Release 链接、版本/versionCode、profile/overlay、applied/skipped feature、APK SHA256、签名/APK 校验与 Actions 链接；**不复制上游长文，也不自动 publish**。标题页由 overlay 原样携带 300115 的 6 个旧文件，不随 packs 漂移。
 - 资产：APK（约 1.35 GB）、`SHA256SUMS.txt`、`build-report.json`、`overlay-report.json`、`compat-report.json`、`apk-verify.json`、`overlay-tests.log`、`BUILD-NOTICE.txt`、`input-report.json`、`upstream-release.json`、`release-meta.json`。
 
 已存在的成功草稿会在每日检测中跳过；`force` 只重建草稿。已正式发布的 Release 不会被自动覆盖，检测会直接 skip。

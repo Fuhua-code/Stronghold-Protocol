@@ -1,6 +1,6 @@
 {
   "name": "stronghold-protocol-packager",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "schemaVersion": 1,
   "profiles": [
     "master",

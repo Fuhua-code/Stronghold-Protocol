@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { applyFeaturePacks } from '../cli/overlay.mjs';
+import { applyFeaturePacks, verifyFrozenTitle } from '../cli/overlay.mjs';
+import { hashFile } from '../cli/common.mjs';
 import { allocateVersionCode, pruneBuilds, readHistory, recordBuild } from '../cli/version.mjs';
 import { buildCompatReport, compatStatus, writeBuildOutputs } from '../cli/compat.mjs';
 import { detectCapacity, inputChecks, verifySourceUnchanged } from '../cli/workbench.mjs';
@@ -41,6 +42,29 @@ test('feature packs apply atomically, honour requires, and skip missing files', 
   assert.equal(await fs.readFile(path.join(stage, 'a.js'), 'utf8'), 'ALPHA\n');
   assert.equal(await fs.readFile(path.join(stage, 'b.js'), 'utf8'), 'BETA\n');
   assert.equal(report.degraded.length, 3);
+});
+
+test('frozen title files are hash-checked and required upstream exports are enforced', async () => {
+  const stage = await tempDir('sp-title-stage-');
+  const root = await tempDir('sp-title-spec-');
+  const file = path.join(stage, 'title.js');
+  await write(file, 'frozen design\n');
+  const sha256 = await hashFile(file);
+  await write(path.join(stage, 'stats.js'), 'export function openStats() {}\n');
+  await write(path.join(root, 'title-files.json'), JSON.stringify({
+    schema: 1,
+    files: [{ path: 'title.js', sha256 }],
+    contract: [
+      { path: 'title.js', markers: ['frozen design'] },
+      { path: 'stats.js', markers: ['openStats'] },
+    ],
+  }));
+  assert.deepEqual(await verifyFrozenTitle(stage, root), { files: 1, contract: 2 });
+  await write(file, 'changed design\n');
+  await assert.rejects(() => verifyFrozenTitle(stage, root), /frozen title file changed/);
+  await write(file, 'frozen design\n');
+  await write(path.join(stage, 'stats.js'), 'export function other() {}\n');
+  await assert.rejects(() => verifyFrozenTitle(stage, root), /title contract export missing/);
 });
 
 test('versionCode is monotonic and build history records one row per profile/code', async () => {

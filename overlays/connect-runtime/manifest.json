@@ -1,6 +1,6 @@
 {
   "id": "connect-runtime",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "sourceVersion": {
     "min": "0.2.2",
     "maxMajor": 0,
@@ -55,6 +55,18 @@
     {
       "source": "files/test/connect-runtime.test.mjs",
       "destination": "test/connect-runtime.test.mjs"
+    },
+    {
+      "source": "files/public/js/screens/title.js",
+      "destination": "public/js/screens/title.js"
+    },
+    {
+      "source": "files/public/js/ui/guide.js",
+      "destination": "public/js/ui/guide.js"
+    },
+    {
+      "source": "files/public/css/screens/title.css",
+      "destination": "public/css/screens/title.css"
     }
   ],
   "anchors": [],
@@ -75,7 +87,10 @@
     "public/css/connect.css",
     "public/js/remote-session.js",
     "public/js/render/board-runtime.js",
-    "mobile/node/wrapper.js"
+    "mobile/node/wrapper.js",
+    "public/js/screens/title.js",
+    "public/js/ui/guide.js",
+    "public/css/screens/title.css"
   ],
   "requiredMarkers": [
     {
@@ -108,5 +123,6 @@
     "HF_TOKEN",
     "FastRTC"
   ],
-  "packs": "packs.json"
+  "packs": "packs.json",
+  "titleFiles": "title-files.json"
 }

@@ -2,7 +2,7 @@
 
 本仓库 `Fuhua-code/Stronghold-Protocol` 是独立静态工作台，与游戏 `master` 分开。工作台读取外部上游工作树，把源码、素材和 Android 运行时复制到 staging，再应用 `connect-runtime` overlay/feature packs 生成 APK；不会拉取、切换、写入或修改上游。
 
-- 默认 profile `connect-runtime`：本地游玩、远程入口/记录、启动期存储/导出桥、可选 UI fallback。
+- 默认 profile `connect-runtime`：本地游玩、远程入口/记录、启动期存储/导出桥、可选 UI fallback；初始界面固定为 300115 旧版设计（overlay 原样文件 + SHA256/导出 contract）。
 - `connect` legacy profile：旧 1.1.11 overlay，显式 fallback。
 - `master` profile：纯上游包，不含联机扩展。
 

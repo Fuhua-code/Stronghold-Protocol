@@ -1,10 +1,12 @@
 {
   "id": "connect-runtime",
-  "description": "Wrapper 反代 + 启动期存储/导出桥 + UI overlay（服务端与 persistence 不再改上游源码）",
+  "description": "冻结 300115 标题设计 + wrapper 反代 + 启动期存储/导出桥 + UI overlay",
   "overlay": "connect-runtime",
   "mobileTemplate": "connect-mobile",
   "persistence": false,
-  "injectedTests": ["test/connect-runtime.test.mjs"],
+  "injectedTests": [
+    "test/connect-runtime.test.mjs"
+  ],
   "extension": {
     "dir": "templates/connect-extension",
     "boot": "boot.js",

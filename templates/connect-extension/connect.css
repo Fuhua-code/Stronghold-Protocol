@@ -1,11 +1,4 @@
-/* Runtime fallback UI. Only spx-* selectors are used so the exact upstream-integrated UI is untouched. */
-.spx-fab {
-  position: fixed; right: 0; top: 50%; transform: translateY(-50%); z-index: 2147482000;
-  padding: 14px 8px; border: 1px solid #46e0b6; border-right: 0; border-radius: 4px 0 0 4px;
-  background: rgba(6, 12, 10, 0.94); color: #e8fff8; writing-mode: vertical-rl;
-  font: 14px/1.4 ui-monospace, monospace; letter-spacing: 0.16em; cursor: pointer;
-}
-.spx-fab:hover { background: rgba(21, 44, 36, 0.98); }
+/* Runtime fallback UI. Only spx-* selectors are used so the exact upstream UI is untouched. */
 .spx-inline {
   margin-right: 8px; padding: 5px 10px; border: 1px solid #46e0b6; border-radius: 2px;
   background: transparent; color: #9ff4dc; font: 12px/1.4 ui-monospace, monospace; cursor: pointer;

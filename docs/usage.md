@@ -19,7 +19,7 @@ packager.cmd verify --apk <APK绝对路径>
 packager.cmd clean                                    # 只删 staging 和失败标记
 ```
 
-`workbench` 先运行 doctor，再构建 `connect-runtime`，默认 `--version-code auto --keep 3`。产物在 `outputs/builds/<version>/<profile>/<versionCode>-<sourceHash>/`，包含 APK、`build-report.json`、`overlay-report.json`、`compat-report.json`、`BUILD-NOTICE.txt`、`apk-verify.json` 和 `SHA256SUMS.txt`。`state/latest.json` 指向最近一次构建，可能是 degraded。
+`workbench` 先运行 doctor，再构建 `connect-runtime`，默认 `--version-code auto --keep 3`。产物在 `outputs/builds/<version>/<profile>/<versionCode>-<sourceHash>/`，包含 APK、`build-report.json`、`overlay-report.json`、`compat-report.json`、`BUILD-NOTICE.txt`、`apk-verify.json` 和 `SHA256SUMS.txt`。`state/latest.json` 指向最近一次构建，可能是 degraded。初始界面由 overlay 原样携带 300115 的 `title.js`/`guide.js`/`title.css` 等 6 个文件并做 SHA256/导出 contract；不要修改这些文件，否则构建会 blocked。
 
 ## 版本
 

@@ -2,6 +2,15 @@
 
 这个目录是一个**离线静态工作台**。它不拉取、不切换、不修改上游仓库；上游源码由使用者放到 `workbench.config.json` 的 `upstreamDir`（默认 `../upstream-src`），打包器只读取并复制到 staging。
 
+## 初始界面（冻结 300115）
+
+初始界面不重新设计：`connect-runtime` overlay 原样携带 300115 APK 内的 6 个文件，并替换上游同名文件：
+
+- `title.js`、`guide.js`、`title.css`
+- `remote-entry.js`、`remote-guide.js`、`connect.css`
+
+`title-files.json` 记录这些文件的 SHA256；构建时逐字校验，并检查旧标题依赖的上游公开导出（`openStats`/`SettingsModal`/`LangToggle`/`identity`/`store`/`isValidName` 等）。缺失或改动会 `overlay-contract-break` 阻断，不会退回浮窗或重新生成一套标题。`connect.css` 会由 `applyExtension` 幂等强制注入，确保远程入口样式始终加载。
+
 ## 一次性准备
 
 1. 把上游 master（含或不含 `.git` 均可）放到 `upstreamDir`：
@@ -51,9 +60,9 @@ packager.cmd verify --apk outputs\builds\...
 workbench.config.json        上游路径、产物/状态目录、floor、保留数、默认 profile
 packager.config.json         本机输入与签名（不包含网络地址）
 cli/                         build / overlay / packs / wrapper / doctor / version / compat
-overlays/connect-runtime/    运行时 overlay：辅助文件 + feature packs（默认）
+overlays/connect-runtime/    旧版标题 6 文件 + 辅助文件 + feature packs（默认）
 overlays/connect/            旧 overlay（80 锚点，显式兜底）
-templates/connect-extension/ boot.js（存储/导出代理）、ui.js/connect.css（降级 UI）
+templates/connect-extension/ boot.js（存储/导出代理）、ui.js/connect.css（设置/统计内联 fallback）
 templates/connect-mobile/    Android 壳、mobile Node wrapper、wrapper 测试
 state/build-history.json     本地 versionCode 历史
 state/latest.json            最近一次构建指针（可能是 degraded；交付版本以 BUILD-NOTICE/记录为准）
@@ -66,10 +75,10 @@ outputs/0.3.1/...            旧版交付目录（不参与新构建覆盖）
 ## 兼容语义
 
 - **core**：上游结构、依赖、overlay 辅助文件、注入测试、签名、APK 校验、源完整性。任一失败 = `blocked`，不覆盖旧产物，退出非零。
-- **feature**：逐个 feature 在内存中匹配全部锚点；任一不命中则整个 feature 不写盘、状态 `skipped`，构建继续。marker 缺失记为 `degraded`（已应用但提示）。
+- **feature**：逐个 feature 在内存中匹配全部锚点；任一不命中则整个 feature 不写盘、状态 `skipped`，构建继续。marker 缺失记为 `degraded`（已应用但提示）。`title-ui` 为零锚点 feature，代表旧版标题文件已由 overlay 提供。
 - **状态**：`success` / `degraded` / `blocked`。`degraded` 默认退出 0 并通知；`--strict` 退出非零。
 - **通知**：控制台 + `BUILD-NOTICE.txt` + App 内一次性横幅（扩展读取 `sp-extension/features.json`）。
-- **兜底**：`connect` 旧 overlay 可显式构建；运行时 UI/存储/导出 fallback；版本化产物保留。
+- **兜底**：`connect` 旧 overlay 可显式构建；settings/stats 使用内联 fallback，**不再创建浮动远程按钮**；标题/启动 contract 缺失直接 blocked。
 
 ## 上游更新后的处理
 

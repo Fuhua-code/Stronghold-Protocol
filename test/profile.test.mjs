@@ -20,12 +20,13 @@ test('connect-runtime declares the schema-2 feature pack contract', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'overlays', 'connect-runtime', 'manifest.json')));
   const packs = JSON.parse(fs.readFileSync(path.join(root, 'overlays', 'connect-runtime', 'packs.json')));
   assert.equal(manifest.id, 'connect-runtime');
-  assert.equal(manifest.version, '2.0.0');
+  assert.equal(manifest.version, '2.1.0');
   assert.equal(manifest.sourceVersion.maxMinor, 3);
   assert.equal(manifest.packs, 'packs.json');
   assert.ok(Array.isArray(manifest.anchors) && manifest.anchors.length === 0);
-  assert.equal(packs.features.length, 11);
-  assert.ok(packs.features.some((feature) => feature.id === 'title' && feature.requires.includes('guide')));
+  assert.equal(packs.features.length, 10);
+  assert.ok(packs.features.some((feature) => feature.id === 'title-ui' && feature.anchors.length === 0));
+  assert.ok(!packs.features.some((feature) => feature.id === 'title' || feature.id === 'guide'));
 });
 
 test('packager manifest owns the independent version and all profiles', () => {
